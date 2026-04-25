@@ -129,7 +129,3 @@ cd apps/web && npm run build
 ## Current API Data Source
 
 The API reads the sensor catalog from PostgreSQL through Npgsql. Make sure the database is running and metadata has been seeded before calling the catalog endpoints.
-
-## Next Slice
-
-The next implementation chunk should refine the frontend interaction model and add smoother chart loading states around range changes.
