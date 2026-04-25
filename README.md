@@ -70,7 +70,14 @@ Useful endpoints:
 - `GET /api/health`
 - `GET /api/sensors`
 - `GET /api/sensors/{sensorId}/channels`
+- `GET /api/sensors/{sensorId}/series?from=2024-01-01T00:00:00Z&to=2024-02-01T00:00:00Z&width=1200`
 - `GET /api/resolution?from=2024-01-01T00:00:00Z&to=2024-02-01T00:00:00Z&width=1200`
+
+The series endpoint automatically selects raw data or a continuous aggregate based on the requested range and chart width. If `channelIds` is omitted, it returns up to six enabled channels for the sensor. To request specific channels, pass comma-separated IDs:
+
+```text
+GET /api/sensors/{sensorId}/series?channelIds={channelId1},{channelId2}&from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&width=1200
+```
 
 ## Verify The Build
 

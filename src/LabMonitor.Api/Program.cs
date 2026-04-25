@@ -13,6 +13,7 @@ builder.Services.AddSingleton(_ =>
     return new NpgsqlDataSourceBuilder(connectionString).Build();
 });
 builder.Services.AddScoped<ISensorCatalogService, PostgresSensorCatalogService>();
+builder.Services.AddScoped<ITimeSeriesQueryService, PostgresTimeSeriesQueryService>();
 builder.Services.AddSingleton<IResolutionSelector, ResolutionSelector>();
 
 var app = builder.Build();
@@ -52,6 +53,36 @@ api.MapGet("/sensors/{sensorId:guid}/channels", async (Guid sensorId, ISensorCat
     return Results.Ok(await catalog.GetChannelsAsync(sensorId, cancellationToken));
 });
 
+api.MapGet("/sensors/{sensorId:guid}/series", async (
+    Guid sensorId,
+    DateTimeOffset from,
+    DateTimeOffset to,
+    int? width,
+    string? channelIds,
+    ISensorCatalogService catalog,
+    ITimeSeriesQueryService timeSeries,
+    CancellationToken cancellationToken) =>
+{
+    if (await catalog.GetSensorAsync(sensorId, cancellationToken) is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (!TryParseChannelIds(channelIds, out var parsedChannelIds))
+    {
+        return Results.BadRequest(new
+        {
+            error = "channelIds must be a comma-separated list of GUIDs."
+        });
+    }
+
+    var response = await timeSeries.QuerySensorSeriesAsync(
+        new SensorSeriesQuery(sensorId, parsedChannelIds, from, to, width.GetValueOrDefault(1200)),
+        cancellationToken);
+
+    return Results.Ok(response);
+});
+
 api.MapGet("/resolution", (
     DateTimeOffset from,
     DateTimeOffset to,
@@ -70,3 +101,27 @@ api.MapGet("/resolution", (
 });
 
 app.Run();
+
+static bool TryParseChannelIds(string? value, out IReadOnlyList<Guid> channelIds)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        channelIds = [];
+        return true;
+    }
+
+    var parsed = new List<Guid>();
+    foreach (var item in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        if (!Guid.TryParse(item, out var channelId))
+        {
+            channelIds = [];
+            return false;
+        }
+
+        parsed.Add(channelId);
+    }
+
+    channelIds = parsed;
+    return true;
+}
