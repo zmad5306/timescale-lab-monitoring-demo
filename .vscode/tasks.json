@@ -8,6 +8,16 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
+      "windows": {
+        "command": "powershell",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}/scripts/bootstrap-dev.ps1"
+        ]
+      },
       "problemMatcher": []
     },
     {

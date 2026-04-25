@@ -112,6 +112,13 @@ To load a larger history, set `LABMONITOR_SEED_YEARS` before launching VS Code:
 LABMONITOR_SEED_YEARS=7 code .
 ```
 
+On Windows PowerShell:
+
+```powershell
+$env:LABMONITOR_SEED_YEARS = "7"
+code .
+```
+
 ## Verify The Build
 
 ```bash
