@@ -1,5 +1,6 @@
 using LabMonitor.Domain;
 using Npgsql;
+using NpgsqlTypes;
 
 var options = SeedOptions.Parse(args);
 
@@ -8,10 +9,18 @@ if (options.ShowHelp)
     Console.WriteLine("""
         LabMonitor.Seed
 
-        Seeds deterministic sensor/channel metadata.
+        Seeds deterministic sensor/channel metadata and optional synthetic readings.
 
         Options:
           --connection-string <value>  PostgreSQL connection string.
+          --readings                   Generate and bulk-load synthetic readings.
+          --from <yyyy-MM-dd>          Reading start date. Defaults to today minus --days.
+          --to <yyyy-MM-dd>            Reading end date. Defaults to today.
+          --days <number>              Reading duration when --from/--to are omitted. Defaults to 30.
+          --years <number>             Reading duration in years. Overrides --days.
+          --batch-days <number>        Load readings in batches. Defaults to 7.
+          --seed <number>              Deterministic generation seed. Defaults to 4242.
+          --refresh-aggregates         Refresh all continuous aggregates after loading readings.
           --help                       Show help.
 
         Defaults to LABMONITOR_CONNECTION_STRING, then local Docker Compose credentials.
@@ -25,6 +34,18 @@ var catalog = DemoCatalog.Create();
 await SeedCatalogAsync(dataSource, catalog.Sensors, catalog.Channels);
 
 Console.WriteLine($"Seeded {catalog.Sensors.Count} sensors and {catalog.Channels.Count} channels.");
+
+if (options.GenerateReadings)
+{
+    var totalRows = await SeedReadingsAsync(dataSource, catalog.Channels, options);
+    Console.WriteLine($"Seeded {totalRows:N0} readings from {options.From:u} to {options.To:u}.");
+
+    if (options.RefreshAggregates)
+    {
+        await RefreshAggregatesAsync(dataSource);
+        Console.WriteLine("Refreshed continuous aggregates.");
+    }
+}
 
 static async Task SeedCatalogAsync(
     NpgsqlDataSource dataSource,
@@ -107,7 +128,95 @@ static async Task SeedCatalogAsync(
     await transaction.CommitAsync();
 }
 
-internal sealed record SeedOptions(string ConnectionString, bool ShowHelp)
+static async Task<long> SeedReadingsAsync(
+    NpgsqlDataSource dataSource,
+    IReadOnlyList<SensorChannel> channels,
+    SeedOptions options)
+{
+    await using var connection = await dataSource.OpenConnectionAsync();
+    var totalRows = 0L;
+
+    for (var batchStart = options.From; batchStart < options.To; batchStart = batchStart.AddDays(options.BatchDays))
+    {
+        var batchEnd = Min(batchStart.AddDays(options.BatchDays), options.To);
+
+        await DeleteReadingWindowAsync(connection, batchStart, batchEnd);
+        totalRows += await CopyReadingWindowAsync(connection, channels, batchStart, batchEnd, options.Seed);
+
+        Console.WriteLine($"Loaded readings through {batchEnd:u}.");
+    }
+
+    return totalRows;
+}
+
+static async Task DeleteReadingWindowAsync(NpgsqlConnection connection, DateTimeOffset from, DateTimeOffset to)
+{
+    await using var command = new NpgsqlCommand("""
+        DELETE FROM sensor_readings
+        WHERE time >= @from AND time < @to;
+        """, connection);
+
+    command.Parameters.AddWithValue("from", from.UtcDateTime);
+    command.Parameters.AddWithValue("to", to.UtcDateTime);
+
+    await command.ExecuteNonQueryAsync();
+}
+
+static Task<long> CopyReadingWindowAsync(
+    NpgsqlConnection connection,
+    IReadOnlyList<SensorChannel> channels,
+    DateTimeOffset from,
+    DateTimeOffset to,
+    int seed)
+{
+    using var importer = connection.BeginBinaryImport("""
+        COPY sensor_readings (time, sensor_id, channel_id, value, quality)
+        FROM STDIN (FORMAT BINARY)
+        """);
+
+    var rows = 0L;
+
+    foreach (var channel in channels)
+    {
+        foreach (var reading in TelemetryGenerator.Generate(channel, from, to, seed))
+        {
+            importer.StartRow();
+            importer.Write(reading.Time.UtcDateTime, NpgsqlDbType.TimestampTz);
+            importer.Write(reading.SensorId, NpgsqlDbType.Uuid);
+            importer.Write(reading.ChannelId, NpgsqlDbType.Uuid);
+            importer.Write(reading.Value, NpgsqlDbType.Double);
+            importer.Write(reading.Quality, NpgsqlDbType.Smallint);
+            rows++;
+        }
+    }
+
+    importer.Complete();
+    return Task.FromResult(rows);
+}
+
+static async Task RefreshAggregatesAsync(NpgsqlDataSource dataSource)
+{
+    await using var connection = await dataSource.OpenConnectionAsync();
+
+    foreach (var aggregate in new[] { "sensor_readings_5m", "sensor_readings_1h", "sensor_readings_1d", "sensor_readings_1mo" })
+    {
+        await using var command = new NpgsqlCommand($"CALL refresh_continuous_aggregate('{aggregate}', NULL, NULL);", connection);
+        await command.ExecuteNonQueryAsync();
+    }
+}
+
+static DateTimeOffset Min(DateTimeOffset left, DateTimeOffset right) =>
+    left <= right ? left : right;
+
+internal sealed record SeedOptions(
+    string ConnectionString,
+    bool ShowHelp,
+    bool GenerateReadings,
+    DateTimeOffset From,
+    DateTimeOffset To,
+    int BatchDays,
+    int Seed,
+    bool RefreshAggregates)
 {
     private const string DefaultConnectionString = "Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor";
 
@@ -115,6 +224,14 @@ internal sealed record SeedOptions(string ConnectionString, bool ShowHelp)
     {
         string? connectionString = Environment.GetEnvironmentVariable("LABMONITOR_CONNECTION_STRING");
         var showHelp = false;
+        var generateReadings = false;
+        int? days = null;
+        int? years = null;
+        DateTimeOffset? from = null;
+        DateTimeOffset? to = null;
+        var batchDays = 7;
+        var seed = 4242;
+        var refreshAggregates = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -123,6 +240,30 @@ internal sealed record SeedOptions(string ConnectionString, bool ShowHelp)
                 case "--connection-string" when index + 1 < args.Length:
                     connectionString = args[++index];
                     break;
+                case "--readings":
+                    generateReadings = true;
+                    break;
+                case "--from" when index + 1 < args.Length:
+                    from = ParseDate(args[++index]);
+                    break;
+                case "--to" when index + 1 < args.Length:
+                    to = ParseDate(args[++index]);
+                    break;
+                case "--days" when index + 1 < args.Length:
+                    days = int.Parse(args[++index]);
+                    break;
+                case "--years" when index + 1 < args.Length:
+                    years = int.Parse(args[++index]);
+                    break;
+                case "--batch-days" when index + 1 < args.Length:
+                    batchDays = int.Parse(args[++index]);
+                    break;
+                case "--seed" when index + 1 < args.Length:
+                    seed = int.Parse(args[++index]);
+                    break;
+                case "--refresh-aggregates":
+                    refreshAggregates = true;
+                    break;
                 case "--help":
                 case "-h":
                     showHelp = true;
@@ -130,7 +271,130 @@ internal sealed record SeedOptions(string ConnectionString, bool ShowHelp)
             }
         }
 
-        return new SeedOptions(connectionString ?? DefaultConnectionString, showHelp);
+        var resolvedTo = to ?? UtcDate(DateOnly.FromDateTime(DateTime.UtcNow));
+        var resolvedFrom = from
+            ?? (years is not null
+                ? resolvedTo.AddYears(-years.Value)
+                : resolvedTo.AddDays(-(days ?? 30)));
+
+        if (resolvedTo <= resolvedFrom)
+        {
+            throw new ArgumentException("--to must be after --from.");
+        }
+
+        if (batchDays < 1)
+        {
+            throw new ArgumentException("--batch-days must be at least 1.");
+        }
+
+        return new SeedOptions(
+            connectionString ?? DefaultConnectionString,
+            showHelp,
+            generateReadings,
+            resolvedFrom,
+            resolvedTo,
+            batchDays,
+            seed,
+            refreshAggregates);
+    }
+
+    private static DateTimeOffset ParseDate(string value) =>
+        UtcDate(DateOnly.Parse(value));
+
+    private static DateTimeOffset UtcDate(DateOnly value) =>
+        new(DateTime.SpecifyKind(value.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc));
+}
+
+internal readonly record struct SensorReading(
+    DateTimeOffset Time,
+    Guid SensorId,
+    Guid ChannelId,
+    double Value,
+    short Quality);
+
+internal static class TelemetryGenerator
+{
+    public static IEnumerable<SensorReading> Generate(
+        SensorChannel channel,
+        DateTimeOffset from,
+        DateTimeOffset to,
+        int seed)
+    {
+        var random = new Random(StableSeed(channel.Id, seed));
+        var profile = channel.GeneratorProfile ?? "default";
+        var offset = random.NextDouble() * 2 - 1;
+        var drift = (random.NextDouble() - 0.5) * 0.002;
+        var outageStart = from.AddTicks((long)((to - from).Ticks * random.NextDouble()));
+        var outageDuration = TimeSpan.FromTicks((long)(channel.NominalSampleInterval.Ticks * random.Next(3, 20)));
+
+        for (var time = from; time < to; time = time.Add(channel.NominalSampleInterval))
+        {
+            if (time >= outageStart && time < outageStart + outageDuration)
+            {
+                continue;
+            }
+
+            var value = ValueFor(profile, time, random, offset, drift);
+
+            if (channel.ExpectedMin is not null && channel.ExpectedMax is not null)
+            {
+                var range = channel.ExpectedMax.Value - channel.ExpectedMin.Value;
+                value = Math.Clamp(value, channel.ExpectedMin.Value - range * 0.1, channel.ExpectedMax.Value + range * 0.1);
+            }
+
+            yield return new SensorReading(time, channel.SensorId, channel.Id, Math.Round(value, 4), 0);
+        }
+    }
+
+    private static double ValueFor(
+        string profile,
+        DateTimeOffset time,
+        Random random,
+        double offset,
+        double drift)
+    {
+        var day = time.DayOfYear;
+        var hour = time.TimeOfDay.TotalHours;
+        var minuteOfYear = day * 24 * 60 + time.Hour * 60 + time.Minute;
+        var seasonal = Math.Sin(2 * Math.PI * day / 365.25);
+        var daily = Math.Sin(2 * Math.PI * hour / 24);
+        var workHours = hour is >= 8 and <= 18 ? 1 : 0;
+        var noise = random.NextDouble() - 0.5;
+        var longDrift = drift * minuteOfYear;
+
+        return profile switch
+        {
+            "ambient-temperature" => 21.5 + seasonal * 1.8 + daily * 0.8 + offset + noise * 0.35 + longDrift,
+            "relative-humidity" => 45 + seasonal * 8 - daily * 4 + offset * 3 + noise * 2.5 + longDrift,
+            "co2-work-hours" => 430 + workHours * (220 + Math.Max(0, Math.Sin(Math.PI * (hour - 8) / 10)) * 450) + noise * 30,
+            "pressure-differential" => 18 + daily * 4 + offset * 2 + noise * 1.5 + RareSpike(random, 20, 0.001),
+            "freezer-probe" => -24 + Math.Sin(2 * Math.PI * hour / 8) * 1.6 + offset * 0.8 + noise * 0.25 + RareSpike(random, 8, 0.0008),
+            "door-open-count" => random.NextDouble() < (workHours == 1 ? 0.08 : 0.01) ? random.Next(1, 4) : 0,
+            "compressor-current" => 7 + Math.Max(0, Math.Sin(2 * Math.PI * hour * 4)) * 5 + noise * 0.8,
+            "incubator-temperature" => 37 + Math.Sin(2 * Math.PI * hour * 2) * 0.18 + offset * 0.1 + noise * 0.08,
+            "incubator-co2" => 50000 + Math.Sin(2 * Math.PI * hour / 6) * 1800 + noise * 450,
+            "vibration-rms" => 0.035 + workHours * 0.035 + Math.Abs(noise) * 0.025 + RareSpike(random, 0.25, 0.002),
+            "shock-event" => random.NextDouble() < 0.0015 ? 0.5 + random.NextDouble() * 3.5 : Math.Abs(noise) * 0.02,
+            "particle-count" => 180 + workHours * 120 + Math.Abs(noise) * 80 + RareSpike(random, 1200, 0.001),
+            "line-pressure" => 620 + seasonal * 20 + daily * 8 + noise * 5,
+            _ => 50 + seasonal * 5 + daily * 2 + offset + noise
+        };
+    }
+
+    private static double RareSpike(Random random, double magnitude, double probability) =>
+        random.NextDouble() < probability ? random.NextDouble() * magnitude : 0;
+
+    private static int StableSeed(Guid id, int seed)
+    {
+        var bytes = id.ToByteArray();
+        var hash = seed;
+
+        foreach (var value in bytes)
+        {
+            hash = unchecked(hash * 31 + value);
+        }
+
+        return hash;
     }
 }
 

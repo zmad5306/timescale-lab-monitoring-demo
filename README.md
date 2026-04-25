@@ -31,6 +31,27 @@ The seed command is idempotent and loads the deterministic demo catalog:
 - 3 to 4 channels per sensor
 - labels and units without requiring a fixed channel type taxonomy
 
+To seed metadata plus a small telemetry window:
+
+```bash
+dotnet run --project src/LabMonitor.Seed -- \
+  --readings \
+  --days 30 \
+  --refresh-aggregates
+```
+
+To generate the full 7-year demo history:
+
+```bash
+dotnet run --project src/LabMonitor.Seed -- \
+  --readings \
+  --years 7 \
+  --batch-days 7 \
+  --refresh-aggregates
+```
+
+The readings loader bulk loads with PostgreSQL binary `COPY`. It deletes each requested batch window before loading it, so rerunning the same date range is repeatable.
+
 To target a different database:
 
 ```bash
