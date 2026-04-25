@@ -32,9 +32,13 @@
     {
       "label": "web: dev",
       "type": "shell",
-      "command": "npm run dev -- --host 127.0.0.1 --strictPort",
+      "command": "npm run dev -- --host 127.0.0.1 --strictPort --clearScreen false",
       "options": {
-        "cwd": "${workspaceFolder}/apps/web"
+        "cwd": "${workspaceFolder}/apps/web",
+        "env": {
+          "FORCE_COLOR": "0",
+          "NO_COLOR": "1"
+        }
       },
       "isBackground": true,
       "problemMatcher": {
@@ -45,8 +49,8 @@
         },
         "background": {
           "activeOnStart": true,
-          "beginsPattern": "^.*VITE.*$",
-          "endsPattern": "^.*Local:.*http://127\\.0\\.0\\.1:5173/.*$"
+          "beginsPattern": ".*",
+          "endsPattern": ".*Local:.*http://(127\\.0\\.0\\.1|localhost):5173/.*"
         }
       }
     },
@@ -61,12 +65,10 @@
       "problemMatcher": "$msCompile"
     },
     {
-      "label": "f5: bootstrap, web, build api",
+      "label": "f5: api ready",
       "dependsOrder": "sequence",
       "dependsOn": [
         "bootstrap: db + seed if needed",
-        "web: install",
-        "web: dev",
         "build: api"
       ],
       "problemMatcher": []

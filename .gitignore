@@ -15,3 +15,4 @@ coverage/
 *.suo
 *.log
 *.tsbuildinfo
+.dotnet

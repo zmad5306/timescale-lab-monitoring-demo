@@ -1,11 +1,43 @@
 {
   "version": "0.2.0",
-  "configurations": [
+  "compounds": [
     {
       "name": "Full Stack Demo",
+      "configurations": [
+        "Web Dev Server",
+        "LabMonitor API"
+      ],
+      "stopAll": true
+    }
+  ],
+  "configurations": [
+    {
+      "name": "Web Dev Server",
+      "type": "pwa-node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}/apps/web",
+      "preLaunchTask": "web: install",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--strictPort",
+        "--clearScreen",
+        "false"
+      ],
+      "console": "integratedTerminal",
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    },
+    {
+      "name": "LabMonitor API",
       "type": "coreclr",
       "request": "launch",
-      "preLaunchTask": "f5: bootstrap, web, build api",
+      "preLaunchTask": "f5: api ready",
       "program": "${workspaceFolder}/src/LabMonitor.Api/bin/Debug/net10.0/LabMonitor.Api.dll",
       "args": [],
       "cwd": "${workspaceFolder}/src/LabMonitor.Api",
