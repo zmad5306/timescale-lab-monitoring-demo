@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LabMonitor.Api/LabMonitor.Api.csproj" />
+    <Project Path="src/LabMonitor.Application/LabMonitor.Application.csproj" />
+    <Project Path="src/LabMonitor.Domain/LabMonitor.Domain.csproj" />
+    <Project Path="src/LabMonitor.Infrastructure/LabMonitor.Infrastructure.csproj" />
+    <Project Path="src/LabMonitor.Seed/LabMonitor.Seed.csproj" />
+  </Folder>
+</Solution>
