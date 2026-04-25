@@ -2,14 +2,15 @@
 
 Demo application for modeling industrial laboratory sensor telemetry with TimescaleDB, .NET 10, React, and Highcharts Stock.
 
-This first implementation slice includes:
+Current implementation includes:
 
 - .NET 10 solution structure
 - sensor/channel domain model
-- initial API endpoints backed by an in-memory catalog
+- API endpoints backed by PostgreSQL/TimescaleDB
 - resolution selection logic for chart downsampling
 - TimescaleDB schema, continuous aggregate, compression, and retention scripts
 - Docker Compose TimescaleDB service
+- React + Highcharts Stock frontend
 
 ## Start TimescaleDB
 
@@ -79,10 +80,21 @@ The series endpoint automatically selects raw data or a continuous aggregate bas
 GET /api/sensors/{sensorId}/series?channelIds={channelId1},{channelId2}&from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z&width=1200
 ```
 
+## Run The Frontend
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/api` to the .NET API at `http://localhost:5053`.
+
 ## Verify The Build
 
 ```bash
 dotnet build LabMonitor.slnx
+cd apps/web && npm run build
 ```
 
 ## Current API Data Source
@@ -91,4 +103,4 @@ The API reads the sensor catalog from PostgreSQL through Npgsql. Make sure the d
 
 ## Next Slice
 
-The next implementation chunk should generate and bulk-load synthetic readings into `sensor_readings`, then refresh the continuous aggregates.
+The next implementation chunk should refine the frontend interaction model and add smoother chart loading states around range changes.
