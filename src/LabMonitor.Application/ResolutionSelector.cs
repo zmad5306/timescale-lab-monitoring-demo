@@ -17,6 +17,9 @@ public sealed class ResolutionSelector : IResolutionSelector
 {
     private const int MinTargetPoints = 800;
     private const int MaxTargetPoints = 1500;
+    private static readonly TimeSpan FiveMinuteToOneHourBoundary = GeometricMean(TimeSpan.FromMinutes(5), TimeSpan.FromHours(1));
+    private static readonly TimeSpan OneHourToOneDayBoundary = GeometricMean(TimeSpan.FromHours(1), TimeSpan.FromDays(1));
+    private static readonly TimeSpan OneDayToOneMonthBoundary = GeometricMean(TimeSpan.FromDays(1), TimeSpan.FromDays(30));
 
     public ResolutionSelection Select(DateTimeOffset from, DateTimeOffset to, int chartWidth)
     {
@@ -34,21 +37,24 @@ public sealed class ResolutionSelector : IResolutionSelector
             return new(TelemetryResolution.Raw, null, "sensor_readings", targetPointCount);
         }
 
-        if (targetBucket < TimeSpan.FromHours(1))
+        if (targetBucket < FiveMinuteToOneHourBoundary)
         {
             return new(TelemetryResolution.FiveMinutes, TimeSpan.FromMinutes(5), "sensor_readings_5m", targetPointCount);
         }
 
-        if (targetBucket < TimeSpan.FromDays(1))
+        if (targetBucket < OneHourToOneDayBoundary)
         {
             return new(TelemetryResolution.OneHour, TimeSpan.FromHours(1), "sensor_readings_1h", targetPointCount);
         }
 
-        if (targetBucket < TimeSpan.FromDays(30))
+        if (targetBucket < OneDayToOneMonthBoundary)
         {
             return new(TelemetryResolution.OneDay, TimeSpan.FromDays(1), "sensor_readings_1d", targetPointCount);
         }
 
         return new(TelemetryResolution.OneMonth, TimeSpan.FromDays(30), "sensor_readings_1mo", targetPointCount);
     }
+
+    private static TimeSpan GeometricMean(TimeSpan left, TimeSpan right) =>
+        TimeSpan.FromSeconds(Math.Sqrt(left.TotalSeconds * right.TotalSeconds));
 }

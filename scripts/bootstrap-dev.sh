@@ -33,6 +33,7 @@ done
 sensor_count="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) FROM sensors;" | tr -d '[:space:]')"
 reading_count="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) FROM sensor_readings;" | tr -d '[:space:]')"
 readings_are_stale="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) = 0 OR max(time) < date_trunc('day', now()) - INTERVAL '1 day' FROM sensor_readings;" | tr -d '[:space:]')"
+aggregate_count="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) FROM sensor_readings_5m;" | tr -d '[:space:]')"
 
 if [[ "$sensor_count" == "0" || "$reading_count" == "0" || "$readings_are_stale" == "t" ]]; then
   echo "Validating seed catalog..."
@@ -44,6 +45,11 @@ if [[ "$sensor_count" == "0" || "$reading_count" == "0" || "$readings_are_stale"
     --readings \
     --years "$SEED_YEARS" \
     --batch-days "$SEED_BATCH_DAYS" \
+    --refresh-aggregates
+elif [[ "$aggregate_count" == "0" ]]; then
+  echo "Readings are seeded but aggregates are empty. Refreshing aggregates..."
+  dotnet run --project src/LabMonitor.Seed -- \
+    --connection-string "$CONNECTION_STRING" \
     --refresh-aggregates
 else
   echo "Database already seeded: ${sensor_count} sensors, ${reading_count} readings."

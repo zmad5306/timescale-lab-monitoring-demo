@@ -50,6 +50,13 @@ type SensorReadingRangeResponse = {
 };
 
 type LoadState = 'idle' | 'loading' | 'refreshing' | 'error';
+type DateRange = { from: Date; to: Date };
+type StockChartWithNavigator = Highcharts.Chart & {
+  navigator?: {
+    xAxis?: Highcharts.Axis;
+    series?: Highcharts.Series[];
+  };
+};
 
 const defaultRangeDays = 30;
 const rangeQueryDelayMs = 280;
@@ -60,7 +67,7 @@ function App() {
   const [channels, setChannels] = React.useState<SensorChannelSummary[]>([]);
   const [selectedChannelIds, setSelectedChannelIds] = React.useState<string[]>([]);
   const [seriesResponse, setSeriesResponse] = React.useState<SensorSeriesResponse | null>(null);
-  const [readingRangeTo, setReadingRangeTo] = React.useState<Date | null>(null);
+  const [readingRange, setReadingRange] = React.useState<DateRange | null>(null);
   const [sensorFilter, setSensorFilter] = React.useState('');
   const [range, setRange] = React.useState(() => defaultRange());
   const [chartWidth, setChartWidth] = React.useState(1200);
@@ -115,14 +122,15 @@ function App() {
         setChannels(items);
         setSelectedChannelIds(items.filter((channel) => channel.isEnabled).slice(0, 4).map((channel) => channel.id));
 
-        if (readingRange.to) {
-          const latestReadingAt = new Date(readingRange.to);
+        if (readingRange.from && readingRange.to) {
+          const availableRange = { from: new Date(readingRange.from), to: new Date(readingRange.to) };
+          const latestReadingAt = availableRange.to;
           const nextRange = rangeEndingAt(latestReadingAt, defaultRangeDays);
-          setReadingRangeTo(latestReadingAt);
+          setReadingRange(availableRange);
           setRange(nextRange);
           setQueryRange(nextRange);
         } else {
-          setReadingRangeTo(null);
+          setReadingRange(null);
         }
       })
       .catch((requestError: Error) => {
@@ -285,15 +293,16 @@ function App() {
         <section className="content-grid">
           <section className="chart-panel" ref={chartShellRef}>
             <div className="chart-toolbar">
-              <RangeButton active={isApproxRange(range, 7)} anchorDate={readingRangeTo} label="7D" days={7} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 30)} anchorDate={readingRangeTo} label="30D" days={30} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 183)} anchorDate={readingRangeTo} label="6M" days={183} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365)} anchorDate={readingRangeTo} label="1Y" days={365} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365 * 7)} anchorDate={readingRangeTo} label="7Y" days={365 * 7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 7)} anchorDate={readingRange?.to ?? null} label="7D" days={7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 30)} anchorDate={readingRange?.to ?? null} label="30D" days={30} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 183)} anchorDate={readingRange?.to ?? null} label="6M" days={183} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365)} anchorDate={readingRange?.to ?? null} label="1Y" days={365} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365 * 7)} anchorDate={readingRange?.to ?? null} label="7Y" days={365 * 7} setRange={setRange} />
             </div>
 
             <StockChart
               response={seriesResponse}
+              dataRange={readingRange}
               loading={loadState === 'loading' || loadState === 'refreshing'}
               onRangeChange={handleRangeChange}
             />
@@ -342,10 +351,12 @@ function App() {
 
 function StockChart({
   response,
+  dataRange,
   loading,
   onRangeChange,
 }: {
   response: SensorSeriesResponse | null;
+  dataRange: DateRange | null;
   loading: boolean;
   onRangeChange: (from: Date, to: Date) => void;
 }) {
@@ -353,6 +364,8 @@ function StockChart({
   const chartRef = React.useRef<Highcharts.Chart | null>(null);
   const debounceRef = React.useRef<number | null>(null);
   const structureRef = React.useRef('');
+  const seriesIdsRef = React.useRef<string[]>([]);
+  const axisIdsRef = React.useRef<string[]>([]);
 
   React.useEffect(() => {
     if (!containerRef.current) {
@@ -373,7 +386,12 @@ function StockChart({
         verticalAlign: 'top',
       },
       navigator: {
+        adaptToUpdatedData: false,
         enabled: true,
+        series: {
+          type: 'line',
+          data: [],
+        },
       },
       rangeSelector: {
         enabled: false,
@@ -400,6 +418,10 @@ function StockChart({
             }
 
             debounceRef.current = window.setTimeout(() => {
+              if (!Number.isFinite(event.min) || !Number.isFinite(event.max) || event.max <= event.min) {
+                return;
+              }
+
               onRangeChange(new Date(event.min), new Date(event.max));
             }, 220);
           },
@@ -420,11 +442,39 @@ function StockChart({
 
   React.useEffect(() => {
     const chart = chartRef.current;
+    if (!chart || !dataRange) {
+      return;
+    }
+
+    const min = dataRange.from.getTime();
+    const max = dataRange.to.getTime();
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+      return;
+    }
+
+    const navigator = (chart as StockChartWithNavigator).navigator;
+    navigator?.series?.[0]?.setData(
+      [
+        [min, 0],
+        [max, 0],
+      ],
+      false,
+      false,
+      false
+    );
+    navigator?.xAxis?.setExtremes(min, max, false, false, { trigger: 'sync' });
+
+    chart.redraw();
+  }, [dataRange]);
+
+  React.useEffect(() => {
+    const chart = chartRef.current;
     if (!chart || !response) {
       return;
     }
 
     const units = Array.from(new Set(response.series.map((item) => item.unit)));
+    const axisIdByUnit = new Map(units.map((unit, index) => [unit, `unit-axis-${index}`]));
     const structure = response.series.map((item) => `${item.channelId}:${item.unit}:${item.name}`).join('|');
 
     if (structureRef.current === structure) {
@@ -442,36 +492,46 @@ function StockChart({
 
     structureRef.current = structure;
     const axes = units.map((unit, index) => ({
-      id: unit,
+      id: axisIdByUnit.get(unit),
       title: { text: unit },
       opposite: index % 2 === 1,
       labels: { align: (index % 2 === 1 ? 'left' : 'right') as Highcharts.AlignValue },
     }));
 
-    while (chart.series.length) {
-      chart.series[0].remove(false);
-    }
+    seriesIdsRef.current.forEach((seriesId) => {
+      const series = chart.get(seriesId) as Highcharts.Series | undefined;
+      series?.remove(false);
+    });
 
-    while (chart.yAxis.length) {
-      chart.yAxis[0].remove(false);
-    }
+    axisIdsRef.current.forEach((axisId) => {
+      const axis = chart.get(axisId) as Highcharts.Axis | undefined;
+      axis?.remove(false);
+    });
 
     axes.forEach((axis) => chart.addAxis(axis, false, false));
 
     response.series.forEach((item) => {
+      const yAxis = axisIdByUnit.get(item.unit);
+      if (!yAxis) {
+        return;
+      }
+
       chart.addSeries(
         {
           type: 'line',
           id: item.channelId,
           name: `${item.name} (${item.unit})`,
           data: item.points,
-          yAxis: item.unit,
+          yAxis,
           tooltip: { valueSuffix: ` ${item.unit}` },
           turboThreshold: 0,
         },
         false
       );
     });
+
+    seriesIdsRef.current = response.series.map((item) => item.channelId);
+    axisIdsRef.current = axes.map((axis) => axis.id).filter((axisId): axisId is string => Boolean(axisId));
 
     chart.xAxis[0].setExtremes(new Date(response.from).getTime(), new Date(response.to).getTime(), false, false, {
       trigger: 'sync',

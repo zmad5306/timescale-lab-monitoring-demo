@@ -2,6 +2,8 @@ using LabMonitor.Application;
 using LabMonitor.Infrastructure;
 using Npgsql;
 
+const int ClientClosedRequestStatusCode = 499;
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
@@ -24,6 +26,22 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next(context);
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+    {
+        if (!context.Response.HasStarted)
+        {
+            context.Response.Clear();
+            context.Response.StatusCode = ClientClosedRequestStatusCode;
+        }
+    }
+});
 
 var api = app.MapGroup("/api");
 
@@ -77,6 +95,14 @@ api.MapGet("/sensors/{sensorId:guid}/series", async (
     ITimeSeriesQueryService timeSeries,
     CancellationToken cancellationToken) =>
 {
+    if (!HasValidRange(from, to))
+    {
+        return Results.BadRequest(new
+        {
+            error = "to must be after from."
+        });
+    }
+
     if (await catalog.GetSensorAsync(sensorId, cancellationToken) is null)
     {
         return Results.NotFound();
@@ -103,6 +129,14 @@ api.MapGet("/resolution", (
     int? width,
     IResolutionSelector selector) =>
 {
+    if (!HasValidRange(from, to))
+    {
+        return Results.BadRequest(new
+        {
+            error = "to must be after from."
+        });
+    }
+
     var selection = selector.Select(from, to, width.GetValueOrDefault(1200));
 
     return Results.Ok(new
@@ -115,6 +149,9 @@ api.MapGet("/resolution", (
 });
 
 app.Run();
+
+static bool HasValidRange(DateTimeOffset from, DateTimeOffset to) =>
+    to > from;
 
 static bool TryParseChannelIds(string? value, out IReadOnlyList<Guid> channelIds)
 {

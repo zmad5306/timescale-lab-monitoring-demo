@@ -47,12 +47,12 @@ if (options.GenerateReadings)
 {
     var totalRows = await SeedReadingsAsync(dataSource, catalog.Channels, options);
     Console.WriteLine($"Seeded {totalRows:N0} readings from {options.From:u} to {options.To:u}.");
+}
 
-    if (options.RefreshAggregates)
-    {
-        await RefreshAggregatesAsync(dataSource);
-        Console.WriteLine("Refreshed continuous aggregates.");
-    }
+if (options.RefreshAggregates)
+{
+    await RefreshAggregatesAsync(dataSource);
+    Console.WriteLine("Refreshed continuous aggregates.");
 }
 
 static async Task SeedCatalogAsync(
@@ -208,7 +208,9 @@ static async Task RefreshAggregatesAsync(NpgsqlDataSource dataSource)
 
     foreach (var aggregate in new[] { "sensor_readings_5m", "sensor_readings_1h", "sensor_readings_1d", "sensor_readings_1mo" })
     {
+        Console.WriteLine($"Refreshing {aggregate}...");
         await using var command = new NpgsqlCommand($"CALL refresh_continuous_aggregate('{aggregate}', NULL, NULL);", connection);
+        command.CommandTimeout = 0;
         await command.ExecuteNonQueryAsync();
     }
 }
