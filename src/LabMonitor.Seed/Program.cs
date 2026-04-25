@@ -21,10 +21,18 @@ if (options.ShowHelp)
           --batch-days <number>        Load readings in batches. Defaults to 7.
           --seed <number>              Deterministic generation seed. Defaults to 4242.
           --refresh-aggregates         Refresh all continuous aggregates after loading readings.
+          --validate-catalog           Validate generated IDs and exit without connecting to the database.
           --help                       Show help.
 
         Defaults to LABMONITOR_CONNECTION_STRING, then local Docker Compose credentials.
         """);
+    return;
+}
+
+if (options.ValidateCatalog)
+{
+    var validationCatalog = DemoCatalog.Create();
+    Console.WriteLine($"Catalog is valid: {validationCatalog.Sensors.Count} sensors, {validationCatalog.Channels.Count} channels.");
     return;
 }
 
@@ -216,7 +224,8 @@ internal sealed record SeedOptions(
     DateTimeOffset To,
     int BatchDays,
     int Seed,
-    bool RefreshAggregates)
+    bool RefreshAggregates,
+    bool ValidateCatalog)
 {
     private const string DefaultConnectionString = "Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor";
 
@@ -232,6 +241,7 @@ internal sealed record SeedOptions(
         var batchDays = 7;
         var seed = 4242;
         var refreshAggregates = false;
+        var validateCatalog = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -264,6 +274,9 @@ internal sealed record SeedOptions(
                 case "--refresh-aggregates":
                     refreshAggregates = true;
                     break;
+                case "--validate-catalog":
+                    validateCatalog = true;
+                    break;
                 case "--help":
                 case "-h":
                     showHelp = true;
@@ -295,7 +308,8 @@ internal sealed record SeedOptions(
             resolvedTo,
             batchDays,
             seed,
-            refreshAggregates);
+            refreshAggregates,
+            validateCatalog);
     }
 
     private static DateTimeOffset ParseDate(string value) =>
@@ -441,7 +455,7 @@ internal sealed record DemoCatalog(
         new(Guid.Parse(id), name, location, model, new DateOnly(year, month, day), notes);
 
     private static SensorChannel Channel(string prefix, int ordinal, Guid sensorId, string name, string unit, TimeSpan interval, double? min, double? max, string profile) =>
-        new(Guid.Parse($"{prefix}-0000-0000-0000-{ordinal:000000000000}"), sensorId, name, unit, interval, min, max, true, profile);
+        new(Guid.Parse($"{prefix[..8]}-0000-0000-{prefix[^4..]}-{ordinal:000000000000}"), sensorId, name, unit, interval, min, max, true, profile);
 
     private static void AddEnvironmental(List<SensorChannel> channels, Guid sensorId, string prefix)
     {
