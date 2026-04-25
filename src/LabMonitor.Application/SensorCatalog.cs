@@ -23,11 +23,11 @@ public sealed record SensorChannelSummary(
 
 public interface ISensorCatalogService
 {
-    IReadOnlyList<SensorSummary> GetSensors();
+    Task<IReadOnlyList<SensorSummary>> GetSensorsAsync(CancellationToken cancellationToken);
 
-    SensorSummary? GetSensor(Guid sensorId);
+    Task<SensorSummary?> GetSensorAsync(Guid sensorId, CancellationToken cancellationToken);
 
-    IReadOnlyList<SensorChannelSummary> GetChannels(Guid sensorId);
+    Task<IReadOnlyList<SensorChannelSummary>> GetChannelsAsync(Guid sensorId, CancellationToken cancellationToken);
 }
 
 public static class SensorCatalogMapping

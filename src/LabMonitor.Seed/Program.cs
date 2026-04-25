@@ -1,2 +1,227 @@
-Console.WriteLine("LabMonitor.Seed scaffold is ready.");
-Console.WriteLine("The next implementation slice will generate catalog metadata and bulk-load synthetic readings.");
+using LabMonitor.Domain;
+using Npgsql;
+
+var options = SeedOptions.Parse(args);
+
+if (options.ShowHelp)
+{
+    Console.WriteLine("""
+        LabMonitor.Seed
+
+        Seeds deterministic sensor/channel metadata.
+
+        Options:
+          --connection-string <value>  PostgreSQL connection string.
+          --help                       Show help.
+
+        Defaults to LABMONITOR_CONNECTION_STRING, then local Docker Compose credentials.
+        """);
+    return;
+}
+
+await using var dataSource = new NpgsqlDataSourceBuilder(options.ConnectionString).Build();
+
+var catalog = DemoCatalog.Create();
+await SeedCatalogAsync(dataSource, catalog.Sensors, catalog.Channels);
+
+Console.WriteLine($"Seeded {catalog.Sensors.Count} sensors and {catalog.Channels.Count} channels.");
+
+static async Task SeedCatalogAsync(
+    NpgsqlDataSource dataSource,
+    IReadOnlyList<Sensor> sensors,
+    IReadOnlyList<SensorChannel> channels)
+{
+    await using var connection = await dataSource.OpenConnectionAsync();
+    await using var transaction = await connection.BeginTransactionAsync();
+
+    foreach (var sensor in sensors)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO sensors (id, name, location, model, installed_on, notes)
+            VALUES (@id, @name, @location, @model, @installed_on, @notes)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                location = EXCLUDED.location,
+                model = EXCLUDED.model,
+                installed_on = EXCLUDED.installed_on,
+                notes = EXCLUDED.notes;
+            """, connection, transaction);
+
+        command.Parameters.AddWithValue("id", sensor.Id);
+        command.Parameters.AddWithValue("name", sensor.Name);
+        command.Parameters.AddWithValue("location", sensor.Location);
+        command.Parameters.AddWithValue("model", sensor.Model);
+        command.Parameters.AddWithValue("installed_on", sensor.InstalledOn);
+        command.Parameters.AddWithValue("notes", (object?)sensor.Notes ?? DBNull.Value);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    foreach (var channel in channels)
+    {
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO sensor_channels (
+                id,
+                sensor_id,
+                name,
+                unit,
+                nominal_sample_interval,
+                expected_min,
+                expected_max,
+                is_enabled,
+                metadata)
+            VALUES (
+                @id,
+                @sensor_id,
+                @name,
+                @unit,
+                @nominal_sample_interval,
+                @expected_min,
+                @expected_max,
+                @is_enabled,
+                jsonb_build_object('generatorProfile', CAST(@generator_profile AS text)))
+            ON CONFLICT (id) DO UPDATE SET
+                sensor_id = EXCLUDED.sensor_id,
+                name = EXCLUDED.name,
+                unit = EXCLUDED.unit,
+                nominal_sample_interval = EXCLUDED.nominal_sample_interval,
+                expected_min = EXCLUDED.expected_min,
+                expected_max = EXCLUDED.expected_max,
+                is_enabled = EXCLUDED.is_enabled,
+                metadata = EXCLUDED.metadata;
+            """, connection, transaction);
+
+        command.Parameters.AddWithValue("id", channel.Id);
+        command.Parameters.AddWithValue("sensor_id", channel.SensorId);
+        command.Parameters.AddWithValue("name", channel.Name);
+        command.Parameters.AddWithValue("unit", channel.Unit);
+        command.Parameters.AddWithValue("nominal_sample_interval", channel.NominalSampleInterval);
+        command.Parameters.AddWithValue("expected_min", (object?)channel.ExpectedMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("expected_max", (object?)channel.ExpectedMax ?? DBNull.Value);
+        command.Parameters.AddWithValue("is_enabled", channel.IsEnabled);
+        command.Parameters.AddWithValue("generator_profile", (object?)channel.GeneratorProfile ?? DBNull.Value);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    await transaction.CommitAsync();
+}
+
+internal sealed record SeedOptions(string ConnectionString, bool ShowHelp)
+{
+    private const string DefaultConnectionString = "Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor";
+
+    public static SeedOptions Parse(string[] args)
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("LABMONITOR_CONNECTION_STRING");
+        var showHelp = false;
+
+        for (var index = 0; index < args.Length; index++)
+        {
+            switch (args[index])
+            {
+                case "--connection-string" when index + 1 < args.Length:
+                    connectionString = args[++index];
+                    break;
+                case "--help":
+                case "-h":
+                    showHelp = true;
+                    break;
+            }
+        }
+
+        return new SeedOptions(connectionString ?? DefaultConnectionString, showHelp);
+    }
+}
+
+internal sealed record DemoCatalog(
+    IReadOnlyList<Sensor> Sensors,
+    IReadOnlyList<SensorChannel> Channels)
+{
+    public static DemoCatalog Create()
+    {
+        var sensors = new[]
+        {
+            Sensor("10000000-0000-0000-0000-000000000001", "Lab Suite A Environmental Monitor", "Lab Suite A", "EnviroSense X4", 2019, 2, 14, "Primary environmental monitor for bench area."),
+            Sensor("10000000-0000-0000-0000-000000000002", "Lab Suite B Environmental Monitor", "Lab Suite B", "EnviroSense X4", 2019, 5, 9, "Secondary environmental monitor for sample prep area."),
+            Sensor("10000000-0000-0000-0000-000000000003", "Cold Room Monitor", "Cold Storage 2", "CryoWatch C6", 2018, 7, 3, "Tracks cold room probes and door activity."),
+            Sensor("10000000-0000-0000-0000-000000000004", "Freezer Rack Monitor", "Biobank Freezer Row", "CryoWatch C6", 2018, 11, 18, "Monitors redundant freezer probes."),
+            Sensor("10000000-0000-0000-0000-000000000005", "Incubator Bank Monitor", "Cell Culture Lab", "CultureGuard I5", 2020, 1, 27, "Tracks incubator chamber conditions."),
+            Sensor("10000000-0000-0000-0000-000000000006", "Vibration Isolation Bench", "Analytical Lab", "MotionGuard V2", 2020, 9, 22, "Monitors vibration-sensitive equipment bench."),
+            Sensor("10000000-0000-0000-0000-000000000007", "Clean Zone Pressure Monitor", "Clean Zone Entry", "AirBalance P3", 2021, 4, 6, "Tracks pressure and particle trends."),
+            Sensor("10000000-0000-0000-0000-000000000008", "Solvent Storage Monitor", "Chemical Storage", "SafeStore S2", 2021, 10, 12, "Tracks storage room environment."),
+            Sensor("10000000-0000-0000-0000-000000000009", "Stability Chamber 1", "Stability Lab", "StabilitySense T8", 2022, 3, 17, "Long-duration chamber monitoring."),
+            Sensor("10000000-0000-0000-0000-000000000010", "Stability Chamber 2", "Stability Lab", "StabilitySense T8", 2022, 3, 17, "Long-duration chamber monitoring."),
+            Sensor("10000000-0000-0000-0000-000000000011", "Utility Corridor Monitor", "Utility Corridor", "EnviroSense X2", 2022, 8, 30, "Slow-moving utility space telemetry."),
+            Sensor("10000000-0000-0000-0000-000000000012", "Mass Spec Room Monitor", "Mass Spectrometry Room", "MotionGuard V2", 2023, 2, 2, "Environmental and vibration monitor.")
+        };
+
+        var channels = new List<SensorChannel>();
+        AddEnvironmental(channels, sensors[0].Id, "20000000-0001");
+        AddEnvironmental(channels, sensors[1].Id, "20000000-0002");
+        AddColdStorage(channels, sensors[2].Id, "20000000-0003");
+        AddColdStorage(channels, sensors[3].Id, "20000000-0004");
+        AddIncubator(channels, sensors[4].Id, "20000000-0005");
+        AddVibration(channels, sensors[5].Id, "20000000-0006");
+        AddCleanZone(channels, sensors[6].Id, "20000000-0007");
+        AddEnvironmental(channels, sensors[7].Id, "20000000-0008");
+        AddIncubator(channels, sensors[8].Id, "20000000-0009");
+        AddIncubator(channels, sensors[9].Id, "20000000-0010");
+        AddUtility(channels, sensors[10].Id, "20000000-0011");
+        AddVibration(channels, sensors[11].Id, "20000000-0012");
+
+        return new DemoCatalog(sensors, channels);
+    }
+
+    private static Sensor Sensor(string id, string name, string location, string model, int year, int month, int day, string notes) =>
+        new(Guid.Parse(id), name, location, model, new DateOnly(year, month, day), notes);
+
+    private static SensorChannel Channel(string prefix, int ordinal, Guid sensorId, string name, string unit, TimeSpan interval, double? min, double? max, string profile) =>
+        new(Guid.Parse($"{prefix}-0000-0000-0000-{ordinal:000000000000}"), sensorId, name, unit, interval, min, max, true, profile);
+
+    private static void AddEnvironmental(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Ambient Temperature", "degC", TimeSpan.FromMinutes(1), 15, 30, "ambient-temperature"));
+        channels.Add(Channel(prefix, 2, sensorId, "Relative Humidity", "%RH", TimeSpan.FromMinutes(1), 20, 80, "relative-humidity"));
+        channels.Add(Channel(prefix, 3, sensorId, "CO2 Concentration", "ppm", TimeSpan.FromMinutes(5), 350, 2000, "co2-work-hours"));
+        channels.Add(Channel(prefix, 4, sensorId, "Pressure Differential", "Pa", TimeSpan.FromMinutes(1), -20, 50, "pressure-differential"));
+    }
+
+    private static void AddColdStorage(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Freezer Probe A", "degC", TimeSpan.FromMinutes(1), -35, -10, "freezer-probe"));
+        channels.Add(Channel(prefix, 2, sensorId, "Freezer Probe B", "degC", TimeSpan.FromMinutes(1), -35, -10, "freezer-probe"));
+        channels.Add(Channel(prefix, 3, sensorId, "Door Open Count", "count", TimeSpan.FromMinutes(5), 0, 10, "door-open-count"));
+        channels.Add(Channel(prefix, 4, sensorId, "Compressor Current", "A", TimeSpan.FromMinutes(1), 0, 20, "compressor-current"));
+    }
+
+    private static void AddIncubator(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Chamber Temperature", "degC", TimeSpan.FromMinutes(1), 30, 45, "incubator-temperature"));
+        channels.Add(Channel(prefix, 2, sensorId, "Relative Humidity", "%RH", TimeSpan.FromMinutes(1), 50, 95, "relative-humidity"));
+        channels.Add(Channel(prefix, 3, sensorId, "CO2 Concentration", "ppm", TimeSpan.FromMinutes(1), 3000, 70000, "incubator-co2"));
+        channels.Add(Channel(prefix, 4, sensorId, "Door Open Count", "count", TimeSpan.FromMinutes(5), 0, 10, "door-open-count"));
+    }
+
+    private static void AddVibration(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Vibration RMS", "g", TimeSpan.FromSeconds(5), 0, 0.5, "vibration-rms"));
+        channels.Add(Channel(prefix, 2, sensorId, "Shock Event Magnitude", "g", TimeSpan.FromSeconds(5), 0, 5, "shock-event"));
+        channels.Add(Channel(prefix, 3, sensorId, "Bench Temperature", "degC", TimeSpan.FromMinutes(1), 15, 30, "ambient-temperature"));
+    }
+
+    private static void AddCleanZone(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Pressure Differential", "Pa", TimeSpan.FromMinutes(1), -20, 80, "pressure-differential"));
+        channels.Add(Channel(prefix, 2, sensorId, "Particle Count", "count/L", TimeSpan.FromMinutes(5), 0, 2500, "particle-count"));
+        channels.Add(Channel(prefix, 3, sensorId, "Ambient Temperature", "degC", TimeSpan.FromMinutes(1), 15, 30, "ambient-temperature"));
+        channels.Add(Channel(prefix, 4, sensorId, "Relative Humidity", "%RH", TimeSpan.FromMinutes(1), 20, 80, "relative-humidity"));
+    }
+
+    private static void AddUtility(List<SensorChannel> channels, Guid sensorId, string prefix)
+    {
+        channels.Add(Channel(prefix, 1, sensorId, "Ambient Temperature", "degC", TimeSpan.FromMinutes(5), 5, 40, "ambient-temperature"));
+        channels.Add(Channel(prefix, 2, sensorId, "Relative Humidity", "%RH", TimeSpan.FromMinutes(5), 10, 90, "relative-humidity"));
+        channels.Add(Channel(prefix, 3, sensorId, "Line Pressure", "kPa", TimeSpan.FromMinutes(5), 300, 900, "line-pressure"));
+    }
+}

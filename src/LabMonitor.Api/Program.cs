@@ -1,10 +1,18 @@
 using LabMonitor.Application;
 using LabMonitor.Infrastructure;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
-builder.Services.AddSingleton<ISensorCatalogService, InMemorySensorCatalogService>();
+builder.Services.AddSingleton(_ =>
+{
+    var connectionString = builder.Configuration.GetConnectionString("LabMonitor")
+        ?? "Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor";
+
+    return new NpgsqlDataSourceBuilder(connectionString).Build();
+});
+builder.Services.AddScoped<ISensorCatalogService, PostgresSensorCatalogService>();
 builder.Services.AddSingleton<IResolutionSelector, ResolutionSelector>();
 
 var app = builder.Build();
@@ -25,23 +33,23 @@ api.MapGet("/health", () => Results.Ok(new
     time = DateTimeOffset.UtcNow
 }));
 
-api.MapGet("/sensors", (ISensorCatalogService catalog) =>
-    Results.Ok(catalog.GetSensors()));
+api.MapGet("/sensors", async (ISensorCatalogService catalog, CancellationToken cancellationToken) =>
+    Results.Ok(await catalog.GetSensorsAsync(cancellationToken)));
 
-api.MapGet("/sensors/{sensorId:guid}", (Guid sensorId, ISensorCatalogService catalog) =>
+api.MapGet("/sensors/{sensorId:guid}", async (Guid sensorId, ISensorCatalogService catalog, CancellationToken cancellationToken) =>
 {
-    var sensor = catalog.GetSensor(sensorId);
+    var sensor = await catalog.GetSensorAsync(sensorId, cancellationToken);
     return sensor is null ? Results.NotFound() : Results.Ok(sensor);
 });
 
-api.MapGet("/sensors/{sensorId:guid}/channels", (Guid sensorId, ISensorCatalogService catalog) =>
+api.MapGet("/sensors/{sensorId:guid}/channels", async (Guid sensorId, ISensorCatalogService catalog, CancellationToken cancellationToken) =>
 {
-    if (catalog.GetSensor(sensorId) is null)
+    if (await catalog.GetSensorAsync(sensorId, cancellationToken) is null)
     {
         return Results.NotFound();
     }
 
-    return Results.Ok(catalog.GetChannels(sensorId));
+    return Results.Ok(await catalog.GetChannelsAsync(sensorId, cancellationToken));
 });
 
 api.MapGet("/resolution", (

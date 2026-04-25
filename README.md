@@ -19,6 +19,25 @@ docker compose up -d db
 
 The database initializes with the SQL files in `db/migrations`.
 
+## Seed Sensor Metadata
+
+```bash
+dotnet run --project src/LabMonitor.Seed
+```
+
+The seed command is idempotent and loads the deterministic demo catalog:
+
+- 12 sensors
+- 3 to 4 channels per sensor
+- labels and units without requiring a fixed channel type taxonomy
+
+To target a different database:
+
+```bash
+dotnet run --project src/LabMonitor.Seed -- \
+  --connection-string "Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor"
+```
+
 ## Run The API
 
 ```bash
@@ -38,6 +57,10 @@ Useful endpoints:
 dotnet build LabMonitor.slnx
 ```
 
+## Current API Data Source
+
+The API reads the sensor catalog from PostgreSQL through Npgsql. Make sure the database is running and metadata has been seeded before calling the catalog endpoints.
+
 ## Next Slice
 
-The next implementation chunk should connect the API to PostgreSQL/TimescaleDB and implement the synthetic seed loader.
+The next implementation chunk should generate and bulk-load synthetic readings into `sensor_readings`, then refresh the continuous aggregates.
