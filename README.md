@@ -100,16 +100,16 @@ The VS Code launch profile runs these steps before starting the API debugger:
 
 - starts TimescaleDB with Docker Compose
 - reapplies SQL migrations
-- seeds metadata plus 7 years of readings when the database has no readings
+- seeds metadata plus 1 year of readings when the database has no readings
 - installs frontend dependencies
 - starts the Vite dev server on `http://127.0.0.1:5173`
 - builds and launches the .NET API on `http://localhost:5053`
 - opens the frontend when the API is listening
 
-To shorten the first seed while iterating, set `LABMONITOR_SEED_YEARS` before launching VS Code:
+To load a larger history, set `LABMONITOR_SEED_YEARS` before launching VS Code:
 
 ```bash
-LABMONITOR_SEED_YEARS=1 code .
+LABMONITOR_SEED_YEARS=7 code .
 ```
 
 ## Verify The Build

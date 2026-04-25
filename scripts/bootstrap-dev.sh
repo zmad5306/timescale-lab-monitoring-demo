@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DB_USER="${POSTGRES_USER:-labmonitor}"
 DB_NAME="${POSTGRES_DB:-labmonitor}"
 CONNECTION_STRING="${LABMONITOR_CONNECTION_STRING:-Host=localhost;Port=5432;Database=labmonitor;Username=labmonitor;Password=labmonitor}"
-SEED_YEARS="${LABMONITOR_SEED_YEARS:-7}"
+SEED_YEARS="${LABMONITOR_SEED_YEARS:-1}"
 SEED_BATCH_DAYS="${LABMONITOR_SEED_BATCH_DAYS:-7}"
 
 cd "$ROOT_DIR"
