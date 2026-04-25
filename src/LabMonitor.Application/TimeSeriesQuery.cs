@@ -7,7 +7,8 @@ public sealed record SensorSeriesQuery(
     IReadOnlyList<Guid> ChannelIds,
     DateTimeOffset From,
     DateTimeOffset To,
-    int ChartWidth);
+    int ChartWidth,
+    IReadOnlyDictionary<Guid, DownsampleMethod> DownsampleMethods);
 
 public sealed record SensorSeriesResponse(
     Guid SensorId,
@@ -28,7 +29,17 @@ public sealed record ChannelSeries(
     Guid ChannelId,
     string Name,
     string Unit,
+    DownsampleMethod DownsampleMethod,
     IReadOnlyList<double[]> Points);
+
+public enum DownsampleMethod
+{
+    Average,
+    Minimum,
+    Maximum,
+    First,
+    Last
+}
 
 public interface ITimeSeriesQueryService
 {

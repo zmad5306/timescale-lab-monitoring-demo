@@ -19,7 +19,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -187,12 +188,15 @@ button {
 
 .chart-toolbar {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid #e0e7ea;
 }
 
-.chart-toolbar button {
+.chart-toolbar button,
+.channel-row select {
   min-width: 48px;
   height: 32px;
   border: 1px solid #cdd8dc;
@@ -201,7 +205,8 @@ button {
   color: #29363d;
 }
 
-.chart-toolbar button:hover {
+.chart-toolbar button:hover,
+.channel-row select:hover:not(:disabled) {
   border-color: #0f766e;
   background: #e7f4f2;
 }
@@ -291,7 +296,7 @@ button {
 
 .channel-row {
   display: grid;
-  grid-template-columns: 18px 1fr;
+  grid-template-columns: 18px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
   padding: 10px;
@@ -313,6 +318,24 @@ button {
 .channel-row strong,
 .channel-row small {
   overflow-wrap: anywhere;
+}
+
+.channel-row select {
+  grid-column: 2;
+  width: 100%;
+  min-width: 0;
+  padding: 0 28px 0 10px;
+  outline: 0;
+}
+
+.channel-row select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.channel-row select:focus-visible {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.16);
 }
 
 @keyframes spin {

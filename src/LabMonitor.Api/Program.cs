@@ -1,12 +1,18 @@
 using LabMonitor.Application;
 using LabMonitor.Infrastructure;
 using Npgsql;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 const int ClientClosedRequestStatusCode = 499;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+});
 builder.Services.AddSingleton(_ =>
 {
     var connectionString = builder.Configuration.GetConnectionString("LabMonitor")
@@ -91,6 +97,7 @@ api.MapGet("/sensors/{sensorId:guid}/series", async (
     DateTimeOffset to,
     int? width,
     string? channelIds,
+    string? downsample,
     ISensorCatalogService catalog,
     ITimeSeriesQueryService timeSeries,
     CancellationToken cancellationToken) =>
@@ -116,8 +123,24 @@ api.MapGet("/sensors/{sensorId:guid}/series", async (
         });
     }
 
+    if (!TryParseDownsampleMethods(downsample, out var downsampleMethods))
+    {
+        return Results.BadRequest(new
+        {
+            error = "downsample must be a comma-separated list of channelId:method pairs. Methods: average, minimum, maximum, first, last."
+        });
+    }
+
+    if (parsedChannelIds.Count > 0 && downsampleMethods.Keys.Any(channelId => !parsedChannelIds.Contains(channelId)))
+    {
+        return Results.BadRequest(new
+        {
+            error = "downsample contains a channel ID that is not included in channelIds."
+        });
+    }
+
     var response = await timeSeries.QuerySensorSeriesAsync(
-        new SensorSeriesQuery(sensorId, parsedChannelIds, from, to, width.GetValueOrDefault(1200)),
+        new SensorSeriesQuery(sensorId, parsedChannelIds, from, to, width.GetValueOrDefault(1200), downsampleMethods),
         cancellationToken);
 
     return Results.Ok(response);
@@ -175,4 +198,64 @@ static bool TryParseChannelIds(string? value, out IReadOnlyList<Guid> channelIds
 
     channelIds = parsed;
     return true;
+}
+
+static bool TryParseDownsampleMethods(string? value, out IReadOnlyDictionary<Guid, DownsampleMethod> methods)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        methods = new Dictionary<Guid, DownsampleMethod>();
+        return true;
+    }
+
+    var parsed = new Dictionary<Guid, DownsampleMethod>();
+    foreach (var item in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        var separatorIndex = item.IndexOf(':', StringComparison.Ordinal);
+        if (separatorIndex <= 0 || separatorIndex == item.Length - 1)
+        {
+            methods = new Dictionary<Guid, DownsampleMethod>();
+            return false;
+        }
+
+        if (!Guid.TryParse(item[..separatorIndex], out var channelId)
+            || !TryParseDownsampleMethod(item[(separatorIndex + 1)..], out var method))
+        {
+            methods = new Dictionary<Guid, DownsampleMethod>();
+            return false;
+        }
+
+        parsed[channelId] = method;
+    }
+
+    methods = parsed;
+    return true;
+}
+
+static bool TryParseDownsampleMethod(string value, out DownsampleMethod method)
+{
+    switch (value.Trim().ToLowerInvariant())
+    {
+        case "average":
+        case "avg":
+            method = DownsampleMethod.Average;
+            return true;
+        case "minimum":
+        case "min":
+            method = DownsampleMethod.Minimum;
+            return true;
+        case "maximum":
+        case "max":
+            method = DownsampleMethod.Maximum;
+            return true;
+        case "first":
+            method = DownsampleMethod.First;
+            return true;
+        case "last":
+            method = DownsampleMethod.Last;
+            return true;
+        default:
+            method = default;
+            return false;
+    }
 }

@@ -29,6 +29,7 @@ type ChannelSeries = {
   channelId: string;
   name: string;
   unit: string;
+  downsampleMethod: string;
   points: [number, number][];
 };
 
@@ -51,6 +52,7 @@ type SensorReadingRangeResponse = {
 
 type LoadState = 'idle' | 'loading' | 'refreshing' | 'error';
 type DateRange = { from: Date; to: Date };
+type DownsampleMethod = 'average' | 'minimum' | 'maximum' | 'first' | 'last';
 type StockChartWithNavigator = Highcharts.Chart & {
   navigator?: {
     xAxis?: Highcharts.Axis;
@@ -60,6 +62,13 @@ type StockChartWithNavigator = Highcharts.Chart & {
 
 const defaultRangeDays = 30;
 const rangeQueryDelayMs = 280;
+const downsampleOptions: { value: DownsampleMethod; label: string }[] = [
+  { value: 'average', label: 'Average' },
+  { value: 'minimum', label: 'Minimum' },
+  { value: 'maximum', label: 'Maximum' },
+  { value: 'first', label: 'First' },
+  { value: 'last', label: 'Last' },
+];
 
 function App() {
   const [sensors, setSensors] = React.useState<SensorSummary[]>([]);
@@ -69,6 +78,7 @@ function App() {
   const [seriesResponse, setSeriesResponse] = React.useState<SensorSeriesResponse | null>(null);
   const [readingRange, setReadingRange] = React.useState<DateRange | null>(null);
   const [sensorFilter, setSensorFilter] = React.useState('');
+  const [downsampleMethods, setDownsampleMethods] = React.useState<Record<string, DownsampleMethod>>({});
   const [range, setRange] = React.useState(() => defaultRange());
   const [chartWidth, setChartWidth] = React.useState(1200);
   const [queryRange, setQueryRange] = React.useState(range);
@@ -121,6 +131,7 @@ function App() {
 
         setChannels(items);
         setSelectedChannelIds(items.filter((channel) => channel.isEnabled).slice(0, 4).map((channel) => channel.id));
+        setDownsampleMethods(Object.fromEntries(items.map((channel) => [channel.id, defaultDownsampleMethod(channel)])));
 
         if (readingRange.from && readingRange.to) {
           const availableRange = { from: new Date(readingRange.from), to: new Date(readingRange.to) };
@@ -173,6 +184,14 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [range, selectedSensorId, selectedChannelIds]);
 
+  const downsampleQuery = React.useMemo(
+    () =>
+      selectedChannelIds
+        .map((channelId) => `${channelId}:${downsampleMethods[channelId] ?? 'average'}`)
+        .join(','),
+    [selectedChannelIds, downsampleMethods]
+  );
+
   React.useEffect(() => {
     if (!selectedSensorId || selectedChannelIds.length === 0) {
       setSeriesResponse(null);
@@ -190,6 +209,7 @@ function App() {
       to: queryRange.to.toISOString(),
       width: String(chartWidth),
       channelIds: selectedChannelIds.join(','),
+      downsample: downsampleQuery,
     });
 
     fetchJson<SensorSeriesResponse>(`/api/sensors/${selectedSensorId}/series?${params}`, controller.signal)
@@ -211,7 +231,7 @@ function App() {
       });
 
     return () => controller.abort();
-  }, [selectedSensorId, selectedChannelIds, queryRange.from, queryRange.to, chartWidth]);
+  }, [selectedSensorId, selectedChannelIds, queryRange.from, queryRange.to, chartWidth, downsampleQuery]);
 
   const selectedSensor = sensors.find((sensor) => sensor.id === selectedSensorId) ?? null;
   const filteredSensors = React.useMemo(() => {
@@ -328,19 +348,41 @@ function App() {
             </div>
 
             <div className="channel-list">
-              {channels.map((channel) => (
-                <label className="channel-row" key={channel.id}>
-                  <input
-                    checked={selectedChannelIds.includes(channel.id)}
-                    onChange={() => toggleChannel(channel.id)}
-                    type="checkbox"
-                  />
-                  <span>
-                    <strong>{channel.name}</strong>
-                    <small>{channel.unit} · every {formatInterval(channel.nominalSampleSeconds)}</small>
-                  </span>
-                </label>
-              ))}
+              {channels.map((channel) => {
+                const isSelected = selectedChannelIds.includes(channel.id);
+
+                return (
+                  <div className="channel-row" key={channel.id}>
+                    <input
+                      aria-label={`Select ${channel.name}`}
+                      checked={isSelected}
+                      onChange={() => toggleChannel(channel.id)}
+                      type="checkbox"
+                    />
+                    <span>
+                      <strong>{channel.name}</strong>
+                      <small>{channel.unit} · every {formatInterval(channel.nominalSampleSeconds)}</small>
+                    </span>
+                    <select
+                      aria-label={`${channel.name} downsample method`}
+                      disabled={!isSelected}
+                      onChange={(event) =>
+                        setDownsampleMethods((current) => ({
+                          ...current,
+                          [channel.id]: event.target.value as DownsampleMethod,
+                        }))
+                      }
+                      value={downsampleMethods[channel.id] ?? defaultDownsampleMethod(channel)}
+                    >
+                      {downsampleOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
           </aside>
         </section>
@@ -615,6 +657,25 @@ function rangeEndingAt(to: Date, days: number) {
   const from = new Date(normalizedTo);
   from.setUTCDate(from.getUTCDate() - days);
   return { from, to: normalizedTo };
+}
+
+function defaultDownsampleMethod(channel: SensorChannelSummary): DownsampleMethod {
+  const name = channel.name.toLowerCase();
+  const unit = channel.unit.toLowerCase();
+
+  if (name.includes('count') || name.includes('event') || name.includes('shock') || name.includes('freezer') || unit.includes('count')) {
+    return 'maximum';
+  }
+
+  if (name.includes('pressure differential')) {
+    return 'minimum';
+  }
+
+  if (name.includes('current') || name.includes('line pressure')) {
+    return 'last';
+  }
+
+  return 'average';
 }
 
 function formatDate(value: Date) {

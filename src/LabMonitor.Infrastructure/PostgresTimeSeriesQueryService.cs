@@ -22,13 +22,26 @@ public sealed class PostgresTimeSeriesQueryService(
             return EmptyResponse(query, selection);
         }
 
-        var source = QuerySource.For(selection.Resolution);
-        var series = await QuerySourceAsync(query, channelIds, source, cancellationToken);
+        var channelIdsByMethod = channelIds
+            .GroupBy(channelId => DownsampleMethodFor(query, channelId))
+            .ToArray();
+
+        var series = new Dictionary<Guid, MutableSeries>();
+        foreach (var group in channelIdsByMethod)
+        {
+            var source = QuerySource.For(selection.Resolution, group.Key);
+            MergeSeries(series, await QuerySourceAsync(query, group.ToArray(), group.Key, source, cancellationToken));
+        }
+
         var sourceName = selection.SourceName;
 
         if (series.Count == 0 && selection.Resolution != TelemetryResolution.Raw && selection.BucketSize is not null)
         {
-            series = await QueryRawBucketsAsync(query, channelIds, selection.BucketSize.Value, cancellationToken);
+            foreach (var group in channelIdsByMethod)
+            {
+                MergeSeries(series, await QueryRawBucketsAsync(query, group.ToArray(), group.Key, selection.BucketSize.Value, cancellationToken));
+            }
+
             if (series.Count > 0)
             {
                 sourceName = "sensor_readings";
@@ -66,6 +79,7 @@ public sealed class PostgresTimeSeriesQueryService(
     private async Task<Dictionary<Guid, MutableSeries>> QuerySourceAsync(
         SensorSeriesQuery query,
         IReadOnlyList<Guid> channelIds,
+        DownsampleMethod downsampleMethod,
         QuerySource source,
         CancellationToken cancellationToken)
     {
@@ -93,22 +107,23 @@ public sealed class PostgresTimeSeriesQueryService(
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-        return await ReadSeriesAsync(reader, cancellationToken);
+        return await ReadSeriesAsync(reader, downsampleMethod, cancellationToken);
     }
 
     private async Task<Dictionary<Guid, MutableSeries>> QueryRawBucketsAsync(
         SensorSeriesQuery query,
         IReadOnlyList<Guid> channelIds,
+        DownsampleMethod downsampleMethod,
         TimeSpan bucketSize,
         CancellationToken cancellationToken)
     {
-        const string sql = """
+        var sql = $"""
             SELECT
                 r.channel_id,
                 c.name,
                 c.unit,
                 (extract(epoch FROM time_bucket(@bucket_size, r.time)) * 1000)::bigint AS time_ms,
-                avg(r.value) AS value
+                {RawBucketExpression(downsampleMethod)} AS value
             FROM sensor_readings r
             INNER JOIN sensor_channels c ON c.id = r.channel_id
             WHERE r.sensor_id = @sensor_id
@@ -128,7 +143,7 @@ public sealed class PostgresTimeSeriesQueryService(
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
-        return await ReadSeriesAsync(reader, cancellationToken);
+        return await ReadSeriesAsync(reader, downsampleMethod, cancellationToken);
     }
 
     private static SensorSeriesResponse ToResponse(
@@ -145,12 +160,13 @@ public sealed class PostgresTimeSeriesQueryService(
             sourceName,
             selection.TargetPointCount,
             series
-                .Select(item => new ChannelSeries(item.Key, item.Value.Name, item.Value.Unit, item.Value.Points))
+                .Select(item => new ChannelSeries(item.Key, item.Value.Name, item.Value.Unit, item.Value.DownsampleMethod, item.Value.Points))
                 .OrderBy(item => item.Name)
                 .ToArray());
 
     private static async Task<Dictionary<Guid, MutableSeries>> ReadSeriesAsync(
         NpgsqlDataReader reader,
+        DownsampleMethod downsampleMethod,
         CancellationToken cancellationToken)
     {
         var series = new Dictionary<Guid, MutableSeries>();
@@ -160,7 +176,7 @@ public sealed class PostgresTimeSeriesQueryService(
             var channelId = reader.GetGuid(0);
             if (!series.TryGetValue(channelId, out var channelSeries))
             {
-                channelSeries = new MutableSeries(reader.GetString(1), reader.GetString(2));
+                channelSeries = new MutableSeries(reader.GetString(1), reader.GetString(2), downsampleMethod);
                 series.Add(channelId, channelSeries);
             }
 
@@ -206,22 +222,57 @@ public sealed class PostgresTimeSeriesQueryService(
             selection.TargetPointCount,
             []);
 
-    private sealed record MutableSeries(string Name, string Unit)
+    private static DownsampleMethod DownsampleMethodFor(SensorSeriesQuery query, Guid channelId) =>
+        query.DownsampleMethods.TryGetValue(channelId, out var method)
+            ? method
+            : DownsampleMethod.Average;
+
+    private static void MergeSeries(Dictionary<Guid, MutableSeries> target, Dictionary<Guid, MutableSeries> source)
+    {
+        foreach (var item in source)
+        {
+            target[item.Key] = item.Value;
+        }
+    }
+
+    private sealed record MutableSeries(string Name, string Unit, DownsampleMethod DownsampleMethod)
     {
         public List<double[]> Points { get; } = [];
     }
 
     private sealed record QuerySource(string TableName, string TimeColumn, string ValueColumn)
     {
-        public static QuerySource For(TelemetryResolution resolution) =>
+        public static QuerySource For(TelemetryResolution resolution, DownsampleMethod downsampleMethod) =>
             resolution switch
             {
                 TelemetryResolution.Raw => new("sensor_readings", "time", "value"),
-                TelemetryResolution.FiveMinutes => new("sensor_readings_5m", "bucket", "avg_value"),
-                TelemetryResolution.OneHour => new("sensor_readings_1h", "bucket", "avg_value"),
-                TelemetryResolution.OneDay => new("sensor_readings_1d", "bucket", "avg_value"),
-                TelemetryResolution.OneMonth => new("sensor_readings_1mo", "bucket", "avg_value"),
+                TelemetryResolution.FiveMinutes => new("sensor_readings_5m", "bucket", AggregateColumn(downsampleMethod)),
+                TelemetryResolution.OneHour => new("sensor_readings_1h", "bucket", AggregateColumn(downsampleMethod)),
+                TelemetryResolution.OneDay => new("sensor_readings_1d", "bucket", AggregateColumn(downsampleMethod)),
+                TelemetryResolution.OneMonth => new("sensor_readings_1mo", "bucket", AggregateColumn(downsampleMethod)),
                 _ => throw new ArgumentOutOfRangeException(nameof(resolution), resolution, null)
             };
     }
+
+    private static string AggregateColumn(DownsampleMethod downsampleMethod) =>
+        downsampleMethod switch
+        {
+            DownsampleMethod.Average => "avg_value",
+            DownsampleMethod.Minimum => "min_value",
+            DownsampleMethod.Maximum => "max_value",
+            DownsampleMethod.First => "first_value",
+            DownsampleMethod.Last => "last_value",
+            _ => throw new ArgumentOutOfRangeException(nameof(downsampleMethod), downsampleMethod, null)
+        };
+
+    private static string RawBucketExpression(DownsampleMethod downsampleMethod) =>
+        downsampleMethod switch
+        {
+            DownsampleMethod.Average => "avg(r.value)",
+            DownsampleMethod.Minimum => "min(r.value)",
+            DownsampleMethod.Maximum => "max(r.value)",
+            DownsampleMethod.First => "first(r.value, r.time)",
+            DownsampleMethod.Last => "last(r.value, r.time)",
+            _ => throw new ArgumentOutOfRangeException(nameof(downsampleMethod), downsampleMethod, null)
+        };
 }
