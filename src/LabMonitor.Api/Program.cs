@@ -53,6 +53,20 @@ api.MapGet("/sensors/{sensorId:guid}/channels", async (Guid sensorId, ISensorCat
     return Results.Ok(await catalog.GetChannelsAsync(sensorId, cancellationToken));
 });
 
+api.MapGet("/sensors/{sensorId:guid}/reading-range", async (
+    Guid sensorId,
+    ISensorCatalogService catalog,
+    ITimeSeriesQueryService timeSeries,
+    CancellationToken cancellationToken) =>
+{
+    if (await catalog.GetSensorAsync(sensorId, cancellationToken) is null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(await timeSeries.GetSensorReadingRangeAsync(sensorId, cancellationToken));
+});
+
 api.MapGet("/sensors/{sensorId:guid}/series", async (
     Guid sensorId,
     DateTimeOffset from,

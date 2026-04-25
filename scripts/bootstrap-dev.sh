@@ -32,8 +32,9 @@ done
 
 sensor_count="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) FROM sensors;" | tr -d '[:space:]')"
 reading_count="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) FROM sensor_readings;" | tr -d '[:space:]')"
+readings_are_stale="$(docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -Atc "SELECT count(*) = 0 OR max(time) < date_trunc('day', now()) - INTERVAL '1 day' FROM sensor_readings;" | tr -d '[:space:]')"
 
-if [[ "$sensor_count" == "0" || "$reading_count" == "0" ]]; then
+if [[ "$sensor_count" == "0" || "$reading_count" == "0" || "$readings_are_stale" == "t" ]]; then
   echo "Validating seed catalog..."
   dotnet run --project src/LabMonitor.Seed -- --validate-catalog
 

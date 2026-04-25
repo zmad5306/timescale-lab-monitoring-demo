@@ -43,6 +43,12 @@ type SensorSeriesResponse = {
   series: ChannelSeries[];
 };
 
+type SensorReadingRangeResponse = {
+  sensorId: string;
+  from: string | null;
+  to: string | null;
+};
+
 type LoadState = 'idle' | 'loading' | 'refreshing' | 'error';
 
 const defaultRangeDays = 30;
@@ -54,6 +60,7 @@ function App() {
   const [channels, setChannels] = React.useState<SensorChannelSummary[]>([]);
   const [selectedChannelIds, setSelectedChannelIds] = React.useState<string[]>([]);
   const [seriesResponse, setSeriesResponse] = React.useState<SensorSeriesResponse | null>(null);
+  const [readingRangeTo, setReadingRangeTo] = React.useState<Date | null>(null);
   const [sensorFilter, setSensorFilter] = React.useState('');
   const [range, setRange] = React.useState(() => defaultRange());
   const [chartWidth, setChartWidth] = React.useState(1200);
@@ -96,14 +103,27 @@ function App() {
 
     let cancelled = false;
 
-    fetchJson<SensorChannelSummary[]>(`/api/sensors/${selectedSensorId}/channels`)
-      .then((items) => {
+    Promise.all([
+      fetchJson<SensorChannelSummary[]>(`/api/sensors/${selectedSensorId}/channels`),
+      fetchJson<SensorReadingRangeResponse>(`/api/sensors/${selectedSensorId}/reading-range`),
+    ])
+      .then(([items, readingRange]) => {
         if (cancelled) {
           return;
         }
 
         setChannels(items);
         setSelectedChannelIds(items.filter((channel) => channel.isEnabled).slice(0, 4).map((channel) => channel.id));
+
+        if (readingRange.to) {
+          const latestReadingAt = new Date(readingRange.to);
+          const nextRange = rangeEndingAt(latestReadingAt, defaultRangeDays);
+          setReadingRangeTo(latestReadingAt);
+          setRange(nextRange);
+          setQueryRange(nextRange);
+        } else {
+          setReadingRangeTo(null);
+        }
       })
       .catch((requestError: Error) => {
         if (!cancelled) {
@@ -265,11 +285,11 @@ function App() {
         <section className="content-grid">
           <section className="chart-panel" ref={chartShellRef}>
             <div className="chart-toolbar">
-              <RangeButton active={isApproxRange(range, 7)} label="7D" days={7} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 30)} label="30D" days={30} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 183)} label="6M" days={183} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365)} label="1Y" days={365} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365 * 7)} label="7Y" days={365 * 7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 7)} anchorDate={readingRangeTo} label="7D" days={7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 30)} anchorDate={readingRangeTo} label="30D" days={30} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 183)} anchorDate={readingRangeTo} label="6M" days={183} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365)} anchorDate={readingRangeTo} label="1Y" days={365} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365 * 7)} anchorDate={readingRangeTo} label="7Y" days={365 * 7} setRange={setRange} />
             </div>
 
             <StockChart
@@ -485,17 +505,23 @@ function StatusPill({ icon, label }: { icon: React.ReactNode; label: string }) {
 
 function RangeButton({
   active,
+  anchorDate,
   label,
   days,
   setRange,
 }: {
   active: boolean;
+  anchorDate: Date | null;
   label: string;
   days: number;
   setRange: React.Dispatch<React.SetStateAction<{ from: Date; to: Date }>>;
 }) {
   return (
-    <button className={active ? 'active' : undefined} type="button" onClick={() => setRange(rangeFromDays(days))}>
+    <button
+      className={active ? 'active' : undefined}
+      type="button"
+      onClick={() => setRange(anchorDate ? rangeEndingAt(anchorDate, days) : rangeFromDays(days))}
+    >
       {label}
     </button>
   );
@@ -520,6 +546,15 @@ function rangeFromDays(days: number) {
   const from = new Date(to);
   from.setUTCDate(from.getUTCDate() - days);
   return { from, to };
+}
+
+function rangeEndingAt(to: Date, days: number) {
+  const normalizedTo = new Date(to);
+  normalizedTo.setUTCHours(0, 0, 0, 0);
+  normalizedTo.setUTCDate(normalizedTo.getUTCDate() + 1);
+  const from = new Date(normalizedTo);
+  from.setUTCDate(from.getUTCDate() - days);
+  return { from, to: normalizedTo };
 }
 
 function formatDate(value: Date) {

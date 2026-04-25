@@ -19,6 +19,11 @@ public sealed record SensorSeriesResponse(
     int TargetPointCount,
     IReadOnlyList<ChannelSeries> Series);
 
+public sealed record SensorReadingRangeResponse(
+    Guid SensorId,
+    DateTimeOffset? From,
+    DateTimeOffset? To);
+
 public sealed record ChannelSeries(
     Guid ChannelId,
     string Name,
@@ -29,5 +34,9 @@ public interface ITimeSeriesQueryService
 {
     Task<SensorSeriesResponse> QuerySensorSeriesAsync(
         SensorSeriesQuery query,
+        CancellationToken cancellationToken);
+
+    Task<SensorReadingRangeResponse> GetSensorReadingRangeAsync(
+        Guid sensorId,
         CancellationToken cancellationToken);
 }
