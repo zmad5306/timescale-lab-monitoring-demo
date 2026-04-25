@@ -1,7 +1,9 @@
 bin/
 obj/
 .vs/
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
 .idea/
 node_modules/
 dist/

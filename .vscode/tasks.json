@@ -1,0 +1,65 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "bootstrap: db + seed if needed",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/bootstrap-dev.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "web: install",
+      "type": "shell",
+      "command": "npm install",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/web"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "web: dev",
+      "type": "shell",
+      "command": "npm run dev -- --host 127.0.0.1 --strictPort",
+      "options": {
+        "cwd": "${workspaceFolder}/apps/web"
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "vite",
+        "pattern": {
+          "regexp": "^(.*)$",
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^.*VITE.*$",
+          "endsPattern": "^.*Local:.*http://127\\.0\\.0\\.1:5173/.*$"
+        }
+      }
+    },
+    {
+      "label": "build: api",
+      "type": "process",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "${workspaceFolder}/src/LabMonitor.Api/LabMonitor.Api.csproj"
+      ],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "f5: bootstrap, web, build api",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "bootstrap: db + seed if needed",
+        "web: install",
+        "web: dev",
+        "build: api"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

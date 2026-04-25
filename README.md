@@ -92,6 +92,26 @@ The Vite dev server proxies `/api` to the .NET API at `http://localhost:5053`.
 
 The chart keeps the current data visible while range changes debounce and the next resolution loads. Stale requests are aborted or ignored so quick zoom/pan interactions do not overwrite the newest range.
 
+## Run With VS Code
+
+Press `F5` and choose `Full Stack Demo`.
+
+The VS Code launch profile runs these steps before starting the API debugger:
+
+- starts TimescaleDB with Docker Compose
+- reapplies SQL migrations
+- seeds metadata plus 7 years of readings when the database has no readings
+- installs frontend dependencies
+- starts the Vite dev server on `http://127.0.0.1:5173`
+- builds and launches the .NET API on `http://localhost:5053`
+- opens the frontend when the API is listening
+
+To shorten the first seed while iterating, set `LABMONITOR_SEED_YEARS` before launching VS Code:
+
+```bash
+LABMONITOR_SEED_YEARS=1 code .
+```
+
 ## Verify The Build
 
 ```bash
