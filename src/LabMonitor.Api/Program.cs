@@ -1,4 +1,5 @@
 using LabMonitor.Application;
+using LabMonitor.Domain;
 using LabMonitor.Infrastructure;
 using Npgsql;
 using System.Text.Json;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { Activity, CalendarRange, Database, Loader2, Search } from 'lucide-react';
+import { Activity, CalendarRange, Database, Loader2, Search, TriangleAlert } from 'lucide-react';
 import Highcharts from 'highcharts/highstock';
 import './styles.css';
 
@@ -22,7 +22,14 @@ type SensorChannelSummary = {
   nominalSampleSeconds: number;
   expectedMin: number | null;
   expectedMax: number | null;
+  alarm: AlarmConfiguration;
   isEnabled: boolean;
+};
+
+type AlarmConfiguration = {
+  normalMin: number | null;
+  normalMax: number | null;
+  downsampleMethod: DownsampleMethod;
 };
 
 type ChannelSeries = {
@@ -30,6 +37,7 @@ type ChannelSeries = {
   name: string;
   unit: string;
   downsampleMethod: string;
+  alarm: AlarmConfiguration;
   points: [number, number][];
 };
 
@@ -380,6 +388,10 @@ function App() {
                     <span>
                       <strong>{channel.name}</strong>
                       <small>{channel.unit} · every {formatInterval(channel.nominalSampleSeconds)}</small>
+                      <small className="alarm-summary">
+                        <TriangleAlert size={13} aria-hidden="true" />
+                        {formatAlarmBand(channel.alarm, channel.unit)}
+                      </small>
                     </span>
                     <select
                       aria-label={`${channel.name} downsample method`}
@@ -468,10 +480,13 @@ function StockChart({
         text: '',
       },
       tooltip: {
+        headerFormat: '<span style="font-size: 0.8em">{point.key:%Y-%m-%d %H:%M:%S}</span><br/>',
         shared: true,
         valueDecimals: 2,
+        xDateFormat: '%Y-%m-%d %H:%M:%S',
       },
       xAxis: {
+        type: 'datetime',
         events: {
           afterSetExtremes(event) {
             if (event.trigger === 'sync') {
@@ -540,12 +555,16 @@ function StockChart({
 
     const units = Array.from(new Set(response.series.map((item) => item.unit)));
     const axisIdByUnit = new Map(units.map((unit, index) => [unit, `unit-axis-${index}`]));
-    const structure = response.series.map((item) => `${item.channelId}:${item.unit}:${item.name}`).join('|');
+    const structure = response.series
+      .map((item) => `${item.channelId}:${item.unit}:${item.name}:${item.alarm.normalMin ?? ''}:${item.alarm.normalMax ?? ''}`)
+      .join('|');
 
     if (structureRef.current === structure) {
       response.series.forEach((item) => {
         const series = chart.get(item.channelId) as Highcharts.Series | undefined;
         series?.setData(item.points, false, false, false);
+        const alarmSeries = chart.get(alarmSeriesId(item.channelId)) as Highcharts.Series | undefined;
+        alarmSeries?.setData(alarmPoints(item), false, false, false);
       });
 
       chart.xAxis[0].setExtremes(new Date(response.from).getTime(), new Date(response.to).getTime(), false, false, {
@@ -561,6 +580,9 @@ function StockChart({
       title: { text: unit },
       opposite: index % 2 === 1,
       labels: { align: (index % 2 === 1 ? 'left' : 'right') as Highcharts.AlignValue },
+      plotBands: response.series
+        .filter((item) => item.unit === unit)
+        .map((item, bandIndex) => alarmPlotBand(item, bandIndex)),
     }));
 
     seriesIdsRef.current.forEach((seriesId) => {
@@ -588,14 +610,38 @@ function StockChart({
           name: `${item.name} (${item.unit})`,
           data: item.points,
           yAxis,
-          tooltip: { valueSuffix: ` ${item.unit}` },
+          tooltip: {
+            pointFormat: `<span style="color:{series.color}">\u25CF</span> {series.name}: <b>{point.y:.2f} ${item.unit}</b><br/>`,
+          },
           turboThreshold: 0,
+        },
+        false
+      );
+
+      chart.addSeries(
+        {
+          type: 'scatter',
+          id: alarmSeriesId(item.channelId),
+          name: `${item.name} alarm`,
+          data: alarmPoints(item),
+          yAxis,
+          color: '#dc2626',
+          marker: {
+            enabled: true,
+            radius: 4,
+            symbol: 'triangle',
+          },
+          tooltip: {
+            pointFormat: `<span style="color:{series.color}">\u25B2</span> {series.name}: <b>{point.y:.2f} ${item.unit}</b><br/>`,
+          },
+          turboThreshold: 0,
+          zIndex: 5,
         },
         false
       );
     });
 
-    seriesIdsRef.current = response.series.map((item) => item.channelId);
+    seriesIdsRef.current = response.series.flatMap((item) => [item.channelId, alarmSeriesId(item.channelId)]);
     axisIdsRef.current = axes.map((axis) => axis.id).filter((axisId): axisId is string => Boolean(axisId));
 
     chart.xAxis[0].setExtremes(new Date(response.from).getTime(), new Date(response.to).getTime(), false, false, {
@@ -683,6 +729,10 @@ function rangeEndingAt(to: Date, days: number) {
 }
 
 function defaultDownsampleMethod(channel: SensorChannelSummary): DownsampleMethod {
+  if (channel.alarm?.downsampleMethod) {
+    return channel.alarm.downsampleMethod;
+  }
+
   const name = channel.name.toLowerCase();
   const unit = channel.unit.toLowerCase();
 
@@ -699,6 +749,50 @@ function defaultDownsampleMethod(channel: SensorChannelSummary): DownsampleMetho
   }
 
   return 'average';
+}
+
+function alarmSeriesId(channelId: string) {
+  return `${channelId}-alarm`;
+}
+
+function alarmPoints(item: ChannelSeries): [number, number][] {
+  return item.points.filter((point) => isInAlarm(point[1], item.alarm));
+}
+
+function isInAlarm(value: number, alarm: AlarmConfiguration) {
+  return (alarm.normalMin !== null && value < alarm.normalMin) || (alarm.normalMax !== null && value > alarm.normalMax);
+}
+
+function alarmPlotBand(item: ChannelSeries, index: number): Highcharts.YAxisPlotBandsOptions {
+  return {
+    id: `${item.channelId}-normal-band`,
+    from: item.alarm.normalMin ?? -Number.MAX_VALUE,
+    to: item.alarm.normalMax ?? Number.MAX_VALUE,
+    color: index % 2 === 0 ? 'rgba(20, 184, 166, 0.08)' : 'rgba(34, 197, 94, 0.07)',
+    label: {
+      text: `${item.name} normal`,
+      style: {
+        color: '#55706b',
+        fontSize: '10px',
+      },
+    },
+  };
+}
+
+function formatAlarmBand(alarm: AlarmConfiguration, unit: string) {
+  if (alarm.normalMin !== null && alarm.normalMax !== null) {
+    return `Normal ${formatNumber(alarm.normalMin)} to ${formatNumber(alarm.normalMax)} ${unit}`;
+  }
+
+  if (alarm.normalMin !== null) {
+    return `Normal >= ${formatNumber(alarm.normalMin)} ${unit}`;
+  }
+
+  return `Normal <= ${formatNumber(alarm.normalMax ?? 0)} ${unit}`;
+}
+
+function formatNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
 function formatDate(value: Date) {

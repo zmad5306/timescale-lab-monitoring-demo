@@ -22,8 +22,9 @@ public sealed class PostgresTimeSeriesQueryService(
             return EmptyResponse(query, selection);
         }
 
+        var defaultDownsampleMethods = await GetDefaultDownsampleMethodsAsync(channelIds, cancellationToken);
         var channelIdsByMethod = channelIds
-            .GroupBy(channelId => DownsampleMethodFor(query, channelId))
+            .GroupBy(channelId => DownsampleMethodFor(query, defaultDownsampleMethods, channelId))
             .ToArray();
 
         var series = new Dictionary<Guid, MutableSeries>();
@@ -88,6 +89,9 @@ public sealed class PostgresTimeSeriesQueryService(
                 r.channel_id,
                 c.name,
                 c.unit,
+                c.alarm_normal_min,
+                c.alarm_normal_max,
+                c.alarm_downsample_method,
                 (extract(epoch FROM r.{source.TimeColumn}) * 1000)::bigint AS time_ms,
                 r.{source.ValueColumn} AS value
             FROM {source.TableName} r
@@ -122,6 +126,9 @@ public sealed class PostgresTimeSeriesQueryService(
                 r.channel_id,
                 c.name,
                 c.unit,
+                c.alarm_normal_min,
+                c.alarm_normal_max,
+                c.alarm_downsample_method,
                 (extract(epoch FROM time_bucket(@bucket_size, r.time)) * 1000)::bigint AS time_ms,
                 {RawBucketExpression(downsampleMethod)} AS value
             FROM sensor_readings r
@@ -130,7 +137,7 @@ public sealed class PostgresTimeSeriesQueryService(
               AND r.channel_id = ANY(@channel_ids)
               AND r.time >= @from
               AND r.time < @to
-            GROUP BY r.channel_id, c.name, c.unit, time_ms
+            GROUP BY r.channel_id, c.name, c.unit, c.alarm_normal_min, c.alarm_normal_max, c.alarm_downsample_method, time_ms
             ORDER BY r.channel_id, time_ms;
             """;
 
@@ -160,7 +167,7 @@ public sealed class PostgresTimeSeriesQueryService(
             sourceName,
             selection.TargetPointCount,
             series
-                .Select(item => new ChannelSeries(item.Key, item.Value.Name, item.Value.Unit, item.Value.DownsampleMethod, item.Value.Points))
+                .Select(item => new ChannelSeries(item.Key, item.Value.Name, item.Value.Unit, item.Value.DownsampleMethod, item.Value.Alarm, item.Value.Points))
                 .OrderBy(item => item.Name)
                 .ToArray());
 
@@ -176,12 +183,19 @@ public sealed class PostgresTimeSeriesQueryService(
             var channelId = reader.GetGuid(0);
             if (!series.TryGetValue(channelId, out var channelSeries))
             {
-                channelSeries = new MutableSeries(reader.GetString(1), reader.GetString(2), downsampleMethod);
+                channelSeries = new MutableSeries(
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    downsampleMethod,
+                    new AlarmConfiguration(
+                        reader.IsDBNull(3) ? null : reader.GetDouble(3),
+                        reader.IsDBNull(4) ? null : reader.GetDouble(4),
+                        ParseDownsampleMethod(reader.GetString(5))));
                 series.Add(channelId, channelSeries);
             }
 
-            var timeMs = reader.GetInt64(3);
-            var value = reader.GetDouble(4);
+            var timeMs = reader.GetInt64(6);
+            var value = reader.GetDouble(7);
             channelSeries.Points.Add([(double)timeMs, value]);
         }
 
@@ -222,10 +236,38 @@ public sealed class PostgresTimeSeriesQueryService(
             selection.TargetPointCount,
             []);
 
-    private static DownsampleMethod DownsampleMethodFor(SensorSeriesQuery query, Guid channelId) =>
+    private async Task<IReadOnlyDictionary<Guid, DownsampleMethod>> GetDefaultDownsampleMethodsAsync(
+        IReadOnlyList<Guid> channelIds,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT id, alarm_downsample_method
+            FROM sensor_channels
+            WHERE id = ANY(@channel_ids);
+            """;
+
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("channel_ids", channelIds.ToArray());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+        var methods = new Dictionary<Guid, DownsampleMethod>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            methods[reader.GetGuid(0)] = ParseDownsampleMethod(reader.GetString(1));
+        }
+
+        return methods;
+    }
+
+    private static DownsampleMethod DownsampleMethodFor(
+        SensorSeriesQuery query,
+        IReadOnlyDictionary<Guid, DownsampleMethod> defaultDownsampleMethods,
+        Guid channelId) =>
         query.DownsampleMethods.TryGetValue(channelId, out var method)
             ? method
-            : DownsampleMethod.Average;
+            : defaultDownsampleMethods.TryGetValue(channelId, out var defaultMethod)
+                ? defaultMethod
+                : DownsampleMethod.Average;
 
     private static void MergeSeries(Dictionary<Guid, MutableSeries> target, Dictionary<Guid, MutableSeries> source)
     {
@@ -235,7 +277,7 @@ public sealed class PostgresTimeSeriesQueryService(
         }
     }
 
-    private sealed record MutableSeries(string Name, string Unit, DownsampleMethod DownsampleMethod)
+    private sealed record MutableSeries(string Name, string Unit, DownsampleMethod DownsampleMethod, AlarmConfiguration Alarm)
     {
         public List<double[]> Points { get; } = [];
     }
@@ -274,5 +316,16 @@ public sealed class PostgresTimeSeriesQueryService(
             DownsampleMethod.First => "first(r.value, r.time)",
             DownsampleMethod.Last => "last(r.value, r.time)",
             _ => throw new ArgumentOutOfRangeException(nameof(downsampleMethod), downsampleMethod, null)
+        };
+
+    private static DownsampleMethod ParseDownsampleMethod(string value) =>
+        value switch
+        {
+            "average" => DownsampleMethod.Average,
+            "minimum" => DownsampleMethod.Minimum,
+            "maximum" => DownsampleMethod.Maximum,
+            "first" => DownsampleMethod.First,
+            "last" => DownsampleMethod.Last,
+            _ => throw new InvalidOperationException($"Unsupported downsample method '{value}'.")
         };
 }

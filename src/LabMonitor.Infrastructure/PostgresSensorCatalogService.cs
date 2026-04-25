@@ -1,4 +1,5 @@
 using LabMonitor.Application;
+using LabMonitor.Domain;
 using Npgsql;
 
 namespace LabMonitor.Infrastructure;
@@ -71,6 +72,9 @@ public sealed class PostgresSensorCatalogService(NpgsqlDataSource dataSource) : 
                 extract(epoch FROM nominal_sample_interval)::int AS nominal_sample_seconds,
                 expected_min,
                 expected_max,
+                alarm_normal_min,
+                alarm_normal_max,
+                alarm_downsample_method,
                 is_enabled
             FROM sensor_channels
             WHERE sensor_id = @sensor_id
@@ -93,7 +97,11 @@ public sealed class PostgresSensorCatalogService(NpgsqlDataSource dataSource) : 
                 reader.GetInt32(4),
                 reader.IsDBNull(5) ? null : reader.GetDouble(5),
                 reader.IsDBNull(6) ? null : reader.GetDouble(6),
-                reader.GetBoolean(7)));
+                new AlarmConfiguration(
+                    reader.IsDBNull(7) ? null : reader.GetDouble(7),
+                    reader.IsDBNull(8) ? null : reader.GetDouble(8),
+                    ParseDownsampleMethod(reader.GetString(9))),
+                reader.GetBoolean(10)));
         }
 
         return channels;
@@ -108,4 +116,15 @@ public sealed class PostgresSensorCatalogService(NpgsqlDataSource dataSource) : 
             reader.GetFieldValue<DateOnly>(4),
             reader.IsDBNull(5) ? null : reader.GetString(5),
             reader.GetInt32(6));
+
+    private static DownsampleMethod ParseDownsampleMethod(string value) =>
+        value switch
+        {
+            "average" => DownsampleMethod.Average,
+            "minimum" => DownsampleMethod.Minimum,
+            "maximum" => DownsampleMethod.Maximum,
+            "first" => DownsampleMethod.First,
+            "last" => DownsampleMethod.Last,
+            _ => throw new InvalidOperationException($"Unsupported downsample method '{value}'.")
+        };
 }

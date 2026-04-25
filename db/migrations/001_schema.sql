@@ -18,9 +18,15 @@ CREATE TABLE IF NOT EXISTS sensor_channels (
     nominal_sample_interval interval NOT NULL,
     expected_min double precision NULL,
     expected_max double precision NULL,
+    alarm_normal_min double precision NULL,
+    alarm_normal_max double precision NULL,
+    alarm_downsample_method text NOT NULL DEFAULT 'average',
     is_enabled boolean NOT NULL DEFAULT true,
     chart_options jsonb NOT NULL DEFAULT '{}'::jsonb,
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT ck_sensor_channels_alarm_has_boundary CHECK (alarm_normal_min IS NOT NULL OR alarm_normal_max IS NOT NULL),
+    CONSTRAINT ck_sensor_channels_alarm_range_order CHECK (alarm_normal_min IS NULL OR alarm_normal_max IS NULL OR alarm_normal_max > alarm_normal_min),
+    CONSTRAINT ck_sensor_channels_alarm_downsample_method CHECK (alarm_downsample_method IN ('average', 'minimum', 'maximum', 'first', 'last')),
     CONSTRAINT uq_sensor_channels_sensor_name UNIQUE (sensor_id, name)
 );
 

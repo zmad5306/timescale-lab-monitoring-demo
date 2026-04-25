@@ -326,6 +326,17 @@ button {
   overflow-wrap: anywhere;
 }
 
+.alarm-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #9f1d1d;
+}
+
+.alarm-summary svg {
+  flex: 0 0 auto;
+}
+
 .channel-row select {
   grid-column: 2;
   width: 100%;

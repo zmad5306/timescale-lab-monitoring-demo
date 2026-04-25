@@ -19,6 +19,7 @@ public sealed record SensorChannelSummary(
     int NominalSampleSeconds,
     double? ExpectedMin,
     double? ExpectedMax,
+    AlarmConfiguration Alarm,
     bool IsEnabled);
 
 public interface ISensorCatalogService
@@ -51,5 +52,6 @@ public static class SensorCatalogMapping
             (int)channel.NominalSampleInterval.TotalSeconds,
             channel.ExpectedMin,
             channel.ExpectedMax,
+            channel.Alarm,
             channel.IsEnabled);
 }

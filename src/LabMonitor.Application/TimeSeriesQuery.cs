@@ -30,16 +30,8 @@ public sealed record ChannelSeries(
     string Name,
     string Unit,
     DownsampleMethod DownsampleMethod,
+    AlarmConfiguration Alarm,
     IReadOnlyList<double[]> Points);
-
-public enum DownsampleMethod
-{
-    Average,
-    Minimum,
-    Maximum,
-    First,
-    Last
-}
 
 public interface ITimeSeriesQueryService
 {

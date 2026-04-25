@@ -97,6 +97,9 @@ static async Task SeedCatalogAsync(
                 nominal_sample_interval,
                 expected_min,
                 expected_max,
+                alarm_normal_min,
+                alarm_normal_max,
+                alarm_downsample_method,
                 is_enabled,
                 metadata)
             VALUES (
@@ -107,6 +110,9 @@ static async Task SeedCatalogAsync(
                 @nominal_sample_interval,
                 @expected_min,
                 @expected_max,
+                @alarm_normal_min,
+                @alarm_normal_max,
+                @alarm_downsample_method,
                 @is_enabled,
                 jsonb_build_object('generatorProfile', CAST(@generator_profile AS text)))
             ON CONFLICT (id) DO UPDATE SET
@@ -116,6 +122,9 @@ static async Task SeedCatalogAsync(
                 nominal_sample_interval = EXCLUDED.nominal_sample_interval,
                 expected_min = EXCLUDED.expected_min,
                 expected_max = EXCLUDED.expected_max,
+                alarm_normal_min = EXCLUDED.alarm_normal_min,
+                alarm_normal_max = EXCLUDED.alarm_normal_max,
+                alarm_downsample_method = EXCLUDED.alarm_downsample_method,
                 is_enabled = EXCLUDED.is_enabled,
                 metadata = EXCLUDED.metadata;
             """, connection, transaction);
@@ -127,6 +136,9 @@ static async Task SeedCatalogAsync(
         command.Parameters.AddWithValue("nominal_sample_interval", channel.NominalSampleInterval);
         command.Parameters.AddWithValue("expected_min", (object?)channel.ExpectedMin ?? DBNull.Value);
         command.Parameters.AddWithValue("expected_max", (object?)channel.ExpectedMax ?? DBNull.Value);
+        command.Parameters.AddWithValue("alarm_normal_min", (object?)channel.Alarm.NormalMin ?? DBNull.Value);
+        command.Parameters.AddWithValue("alarm_normal_max", (object?)channel.Alarm.NormalMax ?? DBNull.Value);
+        command.Parameters.AddWithValue("alarm_downsample_method", DownsampleMethodValue(channel.Alarm.DownsampleMethod));
         command.Parameters.AddWithValue("is_enabled", channel.IsEnabled);
         command.Parameters.AddWithValue("generator_profile", (object?)channel.GeneratorProfile ?? DBNull.Value);
 
@@ -135,6 +147,17 @@ static async Task SeedCatalogAsync(
 
     await transaction.CommitAsync();
 }
+
+static string DownsampleMethodValue(DownsampleMethod method) =>
+    method switch
+    {
+        DownsampleMethod.Average => "average",
+        DownsampleMethod.Minimum => "minimum",
+        DownsampleMethod.Maximum => "maximum",
+        DownsampleMethod.First => "first",
+        DownsampleMethod.Last => "last",
+        _ => throw new ArgumentOutOfRangeException(nameof(method), method, null)
+    };
 
 static async Task<long> SeedReadingsAsync(
     NpgsqlDataSource dataSource,
@@ -339,7 +362,7 @@ internal static class TelemetryGenerator
         var random = new Random(StableSeed(channel.Id, seed));
         var profile = channel.GeneratorProfile ?? "default";
         var offset = random.NextDouble() * 2 - 1;
-        var drift = (random.NextDouble() - 0.5) * 0.002;
+        var drift = (random.NextDouble() - 0.5) * 0.000004;
         var outageStart = from.AddTicks((long)((to - from).Ticks * random.NextDouble()));
         var outageDuration = TimeSpan.FromTicks((long)(channel.NominalSampleInterval.Ticks * random.Next(3, 20)));
 
@@ -350,7 +373,7 @@ internal static class TelemetryGenerator
                 continue;
             }
 
-            var value = ValueFor(profile, time, random, offset, drift);
+            var value = ApplyRareAlarmExcursion(profile, ValueFor(profile, time, random, offset, drift), random);
 
             if (channel.ExpectedMin is not null && channel.ExpectedMax is not null)
             {
@@ -399,6 +422,29 @@ internal static class TelemetryGenerator
 
     private static double RareSpike(Random random, double magnitude, double probability) =>
         random.NextDouble() < probability ? random.NextDouble() * magnitude : 0;
+
+    private static double ApplyRareAlarmExcursion(string profile, double value, Random random) =>
+        profile switch
+        {
+            "ambient-temperature" => value + RareSignedExcursion(random, 5.5, 0.00004),
+            "relative-humidity" => value + RareSignedExcursion(random, 22, 0.00004),
+            "co2-work-hours" => value + RareSpike(random, 700, 0.00008),
+            "compressor-current" => value + RareSpike(random, 5.5, 0.00004),
+            "incubator-temperature" => value + RareSignedExcursion(random, 0.75, 0.00004),
+            "incubator-co2" => value + RareSignedExcursion(random, 6_000, 0.00004),
+            "line-pressure" => value + RareSignedExcursion(random, 90, 0.00004),
+            _ => value
+        };
+
+    private static double RareSignedExcursion(Random random, double magnitude, double probability)
+    {
+        if (random.NextDouble() >= probability)
+        {
+            return 0;
+        }
+
+        return (random.Next(0, 2) == 0 ? -1 : 1) * (magnitude * (0.6 + random.NextDouble() * 0.4));
+    }
 
     private static int StableSeed(Guid id, int seed)
     {
@@ -457,7 +503,27 @@ internal sealed record DemoCatalog(
         new(Guid.Parse(id), name, location, model, new DateOnly(year, month, day), notes);
 
     private static SensorChannel Channel(string prefix, int ordinal, Guid sensorId, string name, string unit, TimeSpan interval, double? min, double? max, string profile) =>
-        new(Guid.Parse($"{prefix[..8]}-0000-0000-{prefix[^4..]}-{ordinal:000000000000}"), sensorId, name, unit, interval, min, max, true, profile);
+        new(Guid.Parse($"{prefix[..8]}-0000-0000-{prefix[^4..]}-{ordinal:000000000000}"), sensorId, name, unit, interval, min, max, AlarmFor(name, profile), true, profile);
+
+    private static AlarmConfiguration AlarmFor(string name, string profile) =>
+        profile switch
+        {
+            "ambient-temperature" => new AlarmConfiguration(17.5, 27.5, DownsampleMethod.Average),
+            "relative-humidity" => new AlarmConfiguration(24, 76, DownsampleMethod.Average),
+            "co2-work-hours" => new AlarmConfiguration(null, 1_350, DownsampleMethod.Maximum),
+            "pressure-differential" => new AlarmConfiguration(9, 45, DownsampleMethod.Minimum),
+            "freezer-probe" => new AlarmConfiguration(-31, -17, DownsampleMethod.Maximum),
+            "door-open-count" => new AlarmConfiguration(null, 2.5, DownsampleMethod.Maximum),
+            "compressor-current" => new AlarmConfiguration(null, 14.5, DownsampleMethod.Maximum),
+            "incubator-temperature" => new AlarmConfiguration(36.55, 37.45, DownsampleMethod.Average),
+            "incubator-co2" => new AlarmConfiguration(46_000, 54_000, DownsampleMethod.Average),
+            "vibration-rms" => new AlarmConfiguration(null, 0.18, DownsampleMethod.Maximum),
+            "shock-event" => new AlarmConfiguration(null, 0.75, DownsampleMethod.Maximum),
+            "particle-count" => new AlarmConfiguration(null, 900, DownsampleMethod.Maximum),
+            "line-pressure" => new AlarmConfiguration(570, 675, DownsampleMethod.Average),
+            _ when name.Contains("count", StringComparison.OrdinalIgnoreCase) => new AlarmConfiguration(null, 2.5, DownsampleMethod.Maximum),
+            _ => new AlarmConfiguration(null, 55, DownsampleMethod.Average)
+        };
 
     private static void AddEnvironmental(List<SensorChannel> channels, Guid sensorId, string prefix)
     {
