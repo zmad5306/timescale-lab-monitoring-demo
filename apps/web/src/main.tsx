@@ -46,6 +46,7 @@ type SensorSeriesResponse = {
 type LoadState = 'idle' | 'loading' | 'refreshing' | 'error';
 
 const defaultRangeDays = 30;
+const rangeQueryDelayMs = 280;
 
 function App() {
   const [sensors, setSensors] = React.useState<SensorSummary[]>([]);
@@ -56,6 +57,7 @@ function App() {
   const [sensorFilter, setSensorFilter] = React.useState('');
   const [range, setRange] = React.useState(() => defaultRange());
   const [chartWidth, setChartWidth] = React.useState(1200);
+  const [queryRange, setQueryRange] = React.useState(range);
   const [loadState, setLoadState] = React.useState<LoadState>('idle');
   const [error, setError] = React.useState<string | null>(null);
   const latestRequest = React.useRef(0);
@@ -136,6 +138,19 @@ function App() {
       return;
     }
 
+    const timeout = window.setTimeout(() => {
+      setQueryRange(range);
+    }, rangeQueryDelayMs);
+
+    return () => window.clearTimeout(timeout);
+  }, [range, selectedSensorId, selectedChannelIds]);
+
+  React.useEffect(() => {
+    if (!selectedSensorId || selectedChannelIds.length === 0) {
+      setSeriesResponse(null);
+      return;
+    }
+
     const requestId = latestRequest.current + 1;
     latestRequest.current = requestId;
     const controller = new AbortController();
@@ -143,8 +158,8 @@ function App() {
     setError(null);
 
     const params = new URLSearchParams({
-      from: range.from.toISOString(),
-      to: range.to.toISOString(),
+      from: queryRange.from.toISOString(),
+      to: queryRange.to.toISOString(),
       width: String(chartWidth),
       channelIds: selectedChannelIds.join(','),
     });
@@ -168,7 +183,7 @@ function App() {
       });
 
     return () => controller.abort();
-  }, [selectedSensorId, selectedChannelIds, range.from, range.to, chartWidth]);
+  }, [selectedSensorId, selectedChannelIds, queryRange.from, queryRange.to, chartWidth]);
 
   const selectedSensor = sensors.find((sensor) => sensor.id === selectedSensorId) ?? null;
   const filteredSensors = React.useMemo(() => {
@@ -250,11 +265,11 @@ function App() {
         <section className="content-grid">
           <section className="chart-panel" ref={chartShellRef}>
             <div className="chart-toolbar">
-              <RangeButton label="7D" days={7} setRange={setRange} />
-              <RangeButton label="30D" days={30} setRange={setRange} />
-              <RangeButton label="6M" days={183} setRange={setRange} />
-              <RangeButton label="1Y" days={365} setRange={setRange} />
-              <RangeButton label="7Y" days={365 * 7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 7)} label="7D" days={7} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 30)} label="30D" days={30} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 183)} label="6M" days={183} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365)} label="1Y" days={365} setRange={setRange} />
+              <RangeButton active={isApproxRange(range, 365 * 7)} label="7Y" days={365 * 7} setRange={setRange} />
             </div>
 
             <StockChart
@@ -262,6 +277,10 @@ function App() {
               loading={loadState === 'loading' || loadState === 'refreshing'}
               onRangeChange={handleRangeChange}
             />
+
+            {seriesResponse && seriesResponse.series.length === 0 && loadState === 'idle' && (
+              <div className="empty-chart">No readings found for the selected range and channels.</div>
+            )}
 
             {loadState === 'refreshing' && (
               <div className="loading-overlay" role="status">
@@ -313,6 +332,7 @@ function StockChart({
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const chartRef = React.useRef<Highcharts.Chart | null>(null);
   const debounceRef = React.useRef<number | null>(null);
+  const structureRef = React.useRef('');
 
   React.useEffect(() => {
     if (!containerRef.current) {
@@ -385,6 +405,22 @@ function StockChart({
     }
 
     const units = Array.from(new Set(response.series.map((item) => item.unit)));
+    const structure = response.series.map((item) => `${item.channelId}:${item.unit}:${item.name}`).join('|');
+
+    if (structureRef.current === structure) {
+      response.series.forEach((item) => {
+        const series = chart.get(item.channelId) as Highcharts.Series | undefined;
+        series?.setData(item.points, false, false, false);
+      });
+
+      chart.xAxis[0].setExtremes(new Date(response.from).getTime(), new Date(response.to).getTime(), false, false, {
+        trigger: 'sync',
+      });
+      chart.redraw();
+      return;
+    }
+
+    structureRef.current = structure;
     const axes = units.map((unit, index) => ({
       id: unit,
       title: { text: unit },
@@ -406,6 +442,7 @@ function StockChart({
       chart.addSeries(
         {
           type: 'line',
+          id: item.channelId,
           name: `${item.name} (${item.unit})`,
           data: item.points,
           yAxis: item.unit,
@@ -427,7 +464,7 @@ function StockChart({
       return;
     }
 
-    if (loading) {
+    if (loading && !chartRef.current.series.length) {
       chartRef.current.showLoading('Loading');
     } else {
       chartRef.current.hideLoading();
@@ -447,16 +484,18 @@ function StatusPill({ icon, label }: { icon: React.ReactNode; label: string }) {
 }
 
 function RangeButton({
+  active,
   label,
   days,
   setRange,
 }: {
+  active: boolean;
   label: string;
   days: number;
   setRange: React.Dispatch<React.SetStateAction<{ from: Date; to: Date }>>;
 }) {
   return (
-    <button type="button" onClick={() => setRange(rangeFromDays(days))}>
+    <button className={active ? 'active' : undefined} type="button" onClick={() => setRange(rangeFromDays(days))}>
       {label}
     </button>
   );
@@ -493,6 +532,11 @@ function formatInterval(seconds: number) {
   }
 
   return `${Math.round(seconds / 60)}m`;
+}
+
+function isApproxRange(range: { from: Date; to: Date }, days: number) {
+  const actualDays = Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000);
+  return actualDays === days;
 }
 
 createRoot(document.getElementById('root')!).render(

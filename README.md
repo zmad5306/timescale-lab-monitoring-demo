@@ -90,6 +90,8 @@ npm run dev
 
 The Vite dev server proxies `/api` to the .NET API at `http://localhost:5053`.
 
+The chart keeps the current data visible while range changes debounce and the next resolution loads. Stale requests are aborted or ignored so quick zoom/pan interactions do not overwrite the newest range.
+
 ## Verify The Build
 
 ```bash

@@ -206,8 +206,28 @@ button {
   background: #e7f4f2;
 }
 
+.chart-toolbar button.active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
 .chart {
   min-height: 610px;
+}
+
+.empty-chart {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: min(420px, calc(100% - 48px));
+  padding: 12px 14px;
+  border: 1px solid #d7e0e3;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #415058;
+  text-align: center;
+  transform: translate(-50%, -50%);
 }
 
 .loading-overlay {
