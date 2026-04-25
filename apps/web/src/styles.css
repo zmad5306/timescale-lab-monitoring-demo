@@ -190,9 +190,15 @@ button {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 8px 14px;
   padding: 12px 14px;
   border-bottom: 1px solid #e0e7ea;
+}
+
+.range-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .chart-toolbar button,

@@ -62,6 +62,17 @@ type StockChartWithNavigator = Highcharts.Chart & {
 
 const defaultRangeDays = 30;
 const rangeQueryDelayMs = 280;
+const rangeOptions = [
+  { label: '6H', days: 0.25 },
+  { label: '3D', days: 3 },
+  { label: '7D', days: 7 },
+  { label: '30D', days: 30 },
+  { label: '90D', days: 90 },
+  { label: '6M', days: 183 },
+  { label: '1Y', days: 365 },
+  { label: '2Y', days: 365 * 2 },
+  { label: '7Y', days: 365 * 7 },
+];
 const downsampleOptions: { value: DownsampleMethod; label: string }[] = [
   { value: 'average', label: 'Average' },
   { value: 'minimum', label: 'Minimum' },
@@ -313,11 +324,18 @@ function App() {
         <section className="content-grid">
           <section className="chart-panel" ref={chartShellRef}>
             <div className="chart-toolbar">
-              <RangeButton active={isApproxRange(range, 7)} anchorDate={readingRange?.to ?? null} label="7D" days={7} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 30)} anchorDate={readingRange?.to ?? null} label="30D" days={30} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 183)} anchorDate={readingRange?.to ?? null} label="6M" days={183} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365)} anchorDate={readingRange?.to ?? null} label="1Y" days={365} setRange={setRange} />
-              <RangeButton active={isApproxRange(range, 365 * 7)} anchorDate={readingRange?.to ?? null} label="7Y" days={365 * 7} setRange={setRange} />
+              <div className="range-group">
+                {rangeOptions.map((rangeOption) => (
+                  <RangeButton
+                    active={isApproxRange(range, rangeOption.days)}
+                    anchorDate={readingRange?.to ?? null}
+                    key={rangeOption.label}
+                    label={rangeOption.label}
+                    days={rangeOption.days}
+                    setRange={setRange}
+                  />
+                ))}
+              </div>
             </div>
 
             <StockChart
@@ -419,7 +437,12 @@ function StockChart({
         animation: true,
         backgroundColor: 'transparent',
         height: 610,
+        selectionMarkerFill: 'rgba(15, 118, 110, 0.16)',
         spacing: [12, 10, 12, 6],
+        zooming: {
+          mouseWheel: false,
+          type: 'x',
+        },
       },
       credits: { enabled: false },
       legend: {
@@ -646,7 +669,7 @@ function rangeFromDays(days: number) {
   const to = new Date();
   to.setUTCHours(0, 0, 0, 0);
   const from = new Date(to);
-  from.setUTCDate(from.getUTCDate() - days);
+  from.setTime(from.getTime() - days * 86_400_000);
   return { from, to };
 }
 
@@ -655,7 +678,7 @@ function rangeEndingAt(to: Date, days: number) {
   normalizedTo.setUTCHours(0, 0, 0, 0);
   normalizedTo.setUTCDate(normalizedTo.getUTCDate() + 1);
   const from = new Date(normalizedTo);
-  from.setUTCDate(from.getUTCDate() - days);
+  from.setTime(from.getTime() - days * 86_400_000);
   return { from, to: normalizedTo };
 }
 
@@ -691,8 +714,8 @@ function formatInterval(seconds: number) {
 }
 
 function isApproxRange(range: { from: Date; to: Date }, days: number) {
-  const actualDays = Math.round((range.to.getTime() - range.from.getTime()) / 86_400_000);
-  return actualDays === days;
+  const actualDays = (range.to.getTime() - range.from.getTime()) / 86_400_000;
+  return Math.abs(actualDays - days) < 0.01;
 }
 
 createRoot(document.getElementById('root')!).render(
